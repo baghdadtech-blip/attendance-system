@@ -505,11 +505,15 @@ async function supabaseGet(key){
 
 async function supabaseSet(key, value){
   try{
-    const res = await fetch(`${SUPABASE_TABLE_URL}`, {
+    const res = await fetch(`${SUPABASE_TABLE_URL}?on_conflict=key`, {
       method: 'POST',
-      headers: {...SUPABASE_HEADERS, 'Prefer': 'resolution=merge-duplicates'},
+      headers: {...SUPABASE_HEADERS, 'Prefer': 'resolution=merge-duplicates,return=minimal'},
       body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
     });
+    if(!res.ok){
+      const errText = await res.text().catch(()=> '');
+      console.error('Supabase set failed', res.status, errText);
+    }
     return res.ok;
   }catch(e){ console.error('Supabase set error', e); return false; }
 }
