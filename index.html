@@ -393,6 +393,14 @@
       <div class="btn-row" style="margin-bottom:16px;">
         <button class="btn btn-gold btn-sm" onclick="exportPDF()">🖨️ طباعة / تصدير PDF</button>
       </div>
+      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📋 ملخص الفترة (لكل موظف)</div>
+      <div class="table-wrap" style="margin-bottom:20px;">
+        <table id="summaryTable">
+          <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>إجمالي وقت إضافي</th></tr></thead>
+          <tbody id="summaryBody"></tbody>
+        </table>
+      </div>
+      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📄 التفاصيل اليومية</div>
       <div class="table-wrap">
         <table id="reportTable">
           <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
@@ -1293,6 +1301,79 @@ function daysBetween(startStr, endStr){
   return Math.round((e-s)/(1000*60*60*24)) + 1;
 }
 
+const LATE_GRACE_MINUTES = 15;
+
+// builds a list of every calendar date in [start, end] (inclusive)
+function enumerateDates(startStr, endStr){
+  const dates = [];
+  let cur = new Date(startStr + 'T00:00:00');
+  const end = new Date(endStr + 'T00:00:00');
+  while(cur <= end){
+    dates.push(todayKey(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
+function computeReportSummary(){
+  const type = document.getElementById('reportType').value;
+  const dateStr = document.getElementById('reportDate').value || todayKey();
+  const siteFilter = document.getElementById('reportSite').value;
+  const range = getDateRange(type, dateStr);
+  const relevantEmployees = siteFilter==='all' ? employees : employees.filter(e=>e.siteId===siteFilter);
+  const allDates = enumerateDates(range.start, range.end);
+
+  return relevantEmployees.map(emp=>{
+    const empRecords = records.filter(r=>r.empId===emp.id && r.dateKey>=range.start && r.dateKey<=range.end && (siteFilter==='all' || r.siteId===siteFilter));
+    const dayGroups = {};
+    empRecords.forEach(r=>{
+      if(!dayGroups[r.dateKey]) dayGroups[r.dateKey] = {ins:[], outs:[]};
+      dayGroups[r.dateKey][r.type==='in'?'ins':'outs'].push(r);
+    });
+
+    let lateDays = 0;
+    let absentDays = 0;
+    let totalOTHours = 0;
+
+    allDates.forEach(dKey=>{
+      const onHoliday = isHoliday(dKey);
+      const day = dayGroups[dKey];
+      if(!day || !day.ins.length){
+        if(!onHoliday) absentDays++;
+        return;
+      }
+      const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
+      const site = sites.find(s=>s.id===firstIn.siteId);
+      const schedStart = (site && site.workStart) ? site.workStart : workStart;
+      const [sh, sm] = schedStart.split(':').map(Number);
+      const inDate = new Date(firstIn.timestamp);
+      const scheduledStart = new Date(inDate);
+      scheduledStart.setHours(sh, sm, 0, 0);
+      const minutesLate = (inDate - scheduledStart) / 60000;
+      if(!onHoliday && minutesLate > LATE_GRACE_MINUTES) lateDays++;
+
+      if(day.outs.length){
+        const lastOut = day.outs.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).slice(-1)[0];
+        const hrs = calcHoursWorked(firstIn.timestamp, lastOut.timestamp);
+        const stdHrs = getStandardHoursPerDay(firstIn.siteId);
+        if(hrs !== null){
+          if(onHoliday) totalOTHours += hrs;
+          else if(hrs > stdHrs) totalOTHours += (hrs - stdHrs);
+        }
+      }
+    });
+
+    const otH = Math.floor(totalOTHours);
+    const otM = Math.round((totalOTHours-otH)*60);
+    return {
+      empName: emp.name,
+      lateDays,
+      absentDays,
+      overtime: `${otH}:${String(otM).padStart(2,'0')}`
+    };
+  });
+}
+
 function statusLabel(status){
   if(status==='present') return '<span class="badge present">حاضر</span>';
   if(status==='partial') return '<span class="badge partial">جزئي</span>';
@@ -1304,28 +1385,52 @@ function renderReport(){
   const {rows} = computeReportRows();
   const body = document.getElementById('reportBody');
   if(!rows.length){
-    body.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
-    return;
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
+  }else{
+    body.innerHTML = rows.map(r=>`
+      <tr>
+        <td>${r.empName}</td>
+        <td>${r.siteName}</td>
+        <td>${r.firstIn}</td>
+        <td>${r.lastOut}</td>
+        <td>${r.overtime}</td>
+        <td>${statusLabel(r.status)}</td>
+      </tr>
+    `).join('');
   }
-  body.innerHTML = rows.map(r=>`
-    <tr>
-      <td>${r.empName}</td>
-      <td>${r.siteName}</td>
-      <td>${r.firstIn}</td>
-      <td>${r.lastOut}</td>
-      <td>${r.overtime}</td>
-      <td>${statusLabel(r.status)}</td>
-    </tr>
-  `).join('');
+
+  const summary = computeReportSummary();
+  const summaryBody = document.getElementById('summaryBody');
+  if(!summary.length){
+    summaryBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
+  }else{
+    summaryBody.innerHTML = summary.map(s=>`
+      <tr>
+        <td>${s.empName}</td>
+        <td>${s.lateDays > 0 ? `<span class="badge partial">${s.lateDays}</span>` : '0'}</td>
+        <td>${s.absentDays > 0 ? `<span class="badge absent">${s.absentDays}</span>` : '0'}</td>
+        <td>${s.overtime}</td>
+      </tr>
+    `).join('');
+  }
 }
 
 // ---------- PDF export (Arabic via browser print) ----------
 function exportPDF(){
   const {rows, range} = computeReportRows();
+  const summary = computeReportSummary();
   const type = document.getElementById('reportType').value;
   const typeLabel = type==='daily'?'يومي':(type==='weekly'?'أسبوعي':'شهري');
   const siteFilter = document.getElementById('reportSite').value;
   const siteName = siteFilter==='all' ? 'كل المواقع' : (sites.find(s=>s.id===siteFilter)?.name || '—');
+
+  const summaryRowsHtml = summary.map(s=>`
+    <tr>
+      <td>${s.empName}</td>
+      <td>${s.lateDays}</td>
+      <td>${s.absentDays}</td>
+      <td>${s.overtime}</td>
+    </tr>`).join('');
 
   const rowsHtml = rows.map(r=>`
     <tr>
@@ -1348,8 +1453,9 @@ function exportPDF(){
     <style>
       body{font-family:'Segoe UI', Tahoma, Arial, sans-serif; padding:30px; color:#111;}
       h1{font-size:20px; color:#0f1f38; margin-bottom:4px;}
+      h2{font-size:15px; color:#0f1f38; margin:24px 0 4px;}
       .sub{color:#555; font-size:13px; margin-bottom:2px;}
-      table{width:100%; border-collapse:collapse; margin-top:20px; font-size:13px;}
+      table{width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;}
       th{background:#0f1f38; color:#c9a227; padding:9px; text-align:right; font-size:12px;}
       td{padding:8px 9px; border-bottom:1px solid #ddd;}
       tr:nth-child(even){background:#f7f4ed;}
@@ -1377,6 +1483,14 @@ function exportPDF(){
         <div class="sub">نوع التقرير: ${typeLabel} &nbsp;|&nbsp; الفترة: ${range.label}</div>
         <div class="sub">الموقع: ${siteName} &nbsp;|&nbsp; تاريخ الإصدار: ${new Date().toLocaleDateString('ar-IQ')}</div>
       </div>
+
+      <h2>📋 ملخص الفترة (لكل موظف)</h2>
+      <table>
+        <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>إجمالي وقت إضافي</th></tr></thead>
+        <tbody>${summaryRowsHtml || '<tr><td colspan="4" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
+      </table>
+
+      <h2>📄 التفاصيل اليومية</h2>
       <table>
         <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
         <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
@@ -1385,10 +1499,7 @@ function exportPDF(){
     </html>
   `);
   printWin.document.close();
-  // best-effort auto print; if the browser blocks it, the visible button above still works
-  setTimeout(()=>{
-    try{ printWin.focus(); printWin.print(); }catch(e){ /* user can use the visible print button */ }
-  }, 300);
+  // page opens for viewing first; printing/saving is manual via the visible button above
 }
 
 // ============================================================
