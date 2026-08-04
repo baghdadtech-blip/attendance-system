@@ -1095,6 +1095,28 @@ async function updateSiteSchedule(id, field, val){
   showToast('تم تحديث وقت الدوام لـ ' + site.name);
 }
 
+async function renameSite(id){
+  const site = sites.find(s=>s.id===id);
+  if(!site) return;
+  const newName = prompt('اسم الموقع الجديد:', site.name);
+  if(newName === null) return; // cancelled
+  const trimmed = newName.trim();
+  if(!trimmed){ showToast('اسم الموقع لا يمكن أن يكون فارغاً'); return; }
+  site.name = trimmed;
+  await saveSites();
+  showToast('تم تحديث اسم الموقع بنجاح');
+  refreshAdmin();
+}
+
+async function updateSiteCoords(id, field, val){
+  const site = sites.find(s=>s.id===id);
+  const num = parseFloat(val);
+  if(!site || isNaN(num)) return;
+  site[field] = num;
+  await saveSites();
+  showToast('تم تحديث إحداثيات ' + site.name);
+}
+
 function renderSiteList(){
   const wrap = document.getElementById('siteList');
   if(!sites.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد مواقع مضافة</div>'; return; }
@@ -1104,8 +1126,16 @@ function renderSiteList(){
     return `
     <div class="site-list-item">
       <div class="info">
-        <b>${s.name}</b>
-        <span>Lat: ${s.lat.toFixed(5)} · Lng: ${s.lng.toFixed(5)} · الدوام: ${ws} - ${we}</span>
+        <b>${s.name} <button class="btn-ghost btn-sm" onclick="renameSite('${s.id}')" style="color:var(--gold-300); padding:2px 8px; font-size:10px;">✎ تعديل الاسم</button></b>
+        <span style="display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap;">
+          <label style="margin:0; font-size:11px;">Lat:</label>
+          <input type="text" value="${s.lat}" style="width:90px; padding:5px 7px; font-size:11px;"
+            onchange="updateSiteCoords('${s.id}', 'lat', this.value)">
+          <label style="margin:0; font-size:11px;">Lng:</label>
+          <input type="text" value="${s.lng}" style="width:90px; padding:5px 7px; font-size:11px;"
+            onchange="updateSiteCoords('${s.id}', 'lng', this.value)">
+          <span>· الدوام: ${ws} - ${we}</span>
+        </span>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <div style="display:flex; align-items:center; gap:6px;">
@@ -1158,6 +1188,20 @@ async function updateEmployeeSite(empId, newSiteId){
   renderEmpList();
 }
 
+async function renameEmployee(empId){
+  const emp = employees.find(e=>e.id===empId);
+  if(!emp) return;
+  const newName = prompt('اسم الموظف الجديد:', emp.name);
+  if(newName === null) return; // cancelled
+  const trimmed = newName.trim();
+  if(!trimmed){ showToast('الاسم لا يمكن أن يكون فارغاً'); return; }
+  emp.name = trimmed;
+  await saveEmployees();
+  showToast('تم تحديث الاسم بنجاح');
+  renderEmpList();
+  populateEmployeeSelect();
+}
+
 async function unbindEmployeeDevice(empId){
   const emp = employees.find(e=>e.id===empId);
   if(!emp) return;
@@ -1183,6 +1227,7 @@ function renderEmpList(){
           <option value="">بدون موقع أساسي</option>
           ${siteOptions}
         </select>
+        <button class="btn-ghost btn-sm" onclick="renameEmployee('${e.id}')" style="color:var(--gold-300);">✎ تعديل الاسم</button>
         ${e.deviceId ? `<button class="btn-ghost btn-sm" onclick="unbindEmployeeDevice('${e.id}')" style="color:var(--gold-300);">إلغاء ربط الموبايل</button>` : ''}
         <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
       </div>
@@ -1449,9 +1494,12 @@ function exportPDF(){
     <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light only">
+    <meta name="supported-color-schemes" content="light">
     <title>تقرير الحضور - ${typeLabel}</title>
     <style>
       :root{ color-scheme: light; }
+      *{ forced-color-adjust: none !important; }
       html, body{background:#ffffff !important;}
       body{font-family:'Segoe UI', Tahoma, Arial, sans-serif; padding:30px; color:#111111 !important; background:#ffffff !important;}
       h1{font-size:20px; color:#0f1f38 !important; margin-bottom:4px;}
@@ -1469,6 +1517,15 @@ function exportPDF(){
       .print-btn{
         background:#c9a227 !important; color:#0f1f38 !important; border:none; padding:12px 22px;
         border-radius:8px; font-size:15px; font-weight:700; cursor:pointer;
+      }
+      /* Explicitly override even if the browser forces a dark theme (e.g. Firefox auto dark mode) */
+      @media (prefers-color-scheme: dark){
+        html, body{background:#ffffff !important; color:#111111 !important;}
+        td{background:#ffffff !important; color:#111111 !important;}
+        tr:nth-child(even) td{background:#f7f4ed !important; color:#111111 !important;}
+        th{background:#0f1f38 !important; color:#c9a227 !important;}
+        h1, h2{color:#0f1f38 !important;}
+        .sub{color:#555555 !important;}
       }
       @media print{
         .print-bar{ display:none; }
