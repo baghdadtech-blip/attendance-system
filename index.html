@@ -420,6 +420,14 @@
           <label>نطاق GPS (متر)</label>
           <input type="number" id="newSiteRadius" placeholder="300" value="300">
         </div>
+        <div class="field">
+          <label>بداية الدوام</label>
+          <input type="time" id="newSiteWorkStart" value="07:00">
+        </div>
+        <div class="field">
+          <label>نهاية الدوام</label>
+          <input type="time" id="newSiteWorkEnd" value="16:00">
+        </div>
         <button class="btn btn-gold btn-sm" style="height:46px;" onclick="useCurrentLocationForSite()">📍 موقعي الحالي</button>
         <button class="btn btn-in btn-sm" style="height:46px;" onclick="addSite()">إضافة</button>
       </div>
@@ -510,11 +518,21 @@ async function saveSettings(){
   try{ await window.storage.set(STORAGE_KEYS.settings, JSON.stringify({workStart, workEnd, fridayIsHoliday, customHolidays}), true); }catch(e){ showToast('خطأ بحفظ الإعدادات'); }
 }
 
-// standard work hours per day, derived from workStart/workEnd
-function getStandardHoursPerDay(){
-  const [sh, sm] = workStart.split(':').map(Number);
-  const [eh, em] = workEnd.split(':').map(Number);
+// standard work hours per day for a given site, falling back to global settings if the site has no schedule
+function getStandardHoursPerDay(siteId){
+  const site = siteId ? sites.find(s=>s.id===siteId) : null;
+  const start = (site && site.workStart) ? site.workStart : workStart;
+  const end = (site && site.workEnd) ? site.workEnd : workEnd;
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
   return ((eh*60+em) - (sh*60+sm)) / 60;
+}
+
+function getSiteScheduleLabel(siteId){
+  const site = sites.find(s=>s.id===siteId);
+  const start = (site && site.workStart) ? site.workStart : workStart;
+  const end = (site && site.workEnd) ? site.workEnd : workEnd;
+  return `${start} - ${end}`;
 }
 
 function isHoliday(dateKey){
@@ -535,8 +553,8 @@ async function saveRecords(){
 
 function defaultSites(){
   return [
-    {id:'s1', name:'موقع المشروع الرئيسي', lat:33.3128, lng:44.3615, radius:300},
-    {id:'s2', name:'موقع المكتب الإداري', lat:33.3152, lng:44.3661, radius:300},
+    {id:'s1', name:'موقع المشروع الرئيسي', lat:33.3128, lng:44.3615, radius:300, workStart:'07:00', workEnd:'16:00'},
+    {id:'s2', name:'موقع المكتب الإداري', lat:33.3152, lng:44.3661, radius:300, workStart:'09:00', workEnd:'17:00'},
   ];
 }
 function defaultEmployees(){
@@ -747,7 +765,7 @@ function renderTodayLog(){
     const hrs = calcHoursWorked(ins[0].timestamp, outs[outs.length-1].timestamp);
     if(hrs !== null){
       const wh = Math.floor(hrs), wm = Math.round((hrs-wh)*60);
-      const otLabel = todayHoliday ? `أوفرتايم (عطلة): ${formatOvertime(hrs, today)}` : `أوفرتايم: ${formatOvertime(hrs, today)}`;
+      const otLabel = todayHoliday ? `أوفرتايم (عطلة): ${formatOvertime(hrs, today, ins[0].siteId)}` : `أوفرتايم: ${formatOvertime(hrs, today, ins[0].siteId)}`;
       summaryHtml = `<div class="log-row" style="border:1px solid var(--gold-500); background:rgba(201,162,39,.08);">
         <span>إجمالي ساعات العمل اليوم: ${wh}:${String(wm).padStart(2,'0')}${todayHoliday?' (يوم عطلة)':''}</span>
         <span class="log-tag" style="background:rgba(201,162,39,.2); color:var(--gold-300);">${otLabel}</span>
@@ -859,9 +877,10 @@ function renderStatGrid(){
     const outs = empToday.filter(r=>r.type==='out').sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
     if(ins.length && outs.length){
       const hrs = calcHoursWorked(ins[0].timestamp, outs[outs.length-1].timestamp);
+      const stdHrs = getStandardHoursPerDay(ins[0].siteId);
       if(hrs !== null){
         if(todayIsHoliday) totalOTHours += hrs;
-        else if(hrs > getStandardHoursPerDay()) totalOTHours += (hrs - getStandardHoursPerDay());
+        else if(hrs > stdHrs) totalOTHours += (hrs - stdHrs);
       }
     }
   });
@@ -903,13 +922,17 @@ async function addSite(){
   const lat = parseFloat(document.getElementById('newSiteLat').value);
   const lng = parseFloat(document.getElementById('newSiteLng').value);
   const radius = parseInt(document.getElementById('newSiteRadius').value) || 300;
+  const siteWorkStart = document.getElementById('newSiteWorkStart').value || '07:00';
+  const siteWorkEnd = document.getElementById('newSiteWorkEnd').value || '16:00';
   if(!name || isNaN(lat) || isNaN(lng)){ showToast('الرجاء تعبئة كل الحقول بشكل صحيح'); return; }
-  sites.push({id: uid('s'), name, lat, lng, radius});
+  sites.push({id: uid('s'), name, lat, lng, radius, workStart: siteWorkStart, workEnd: siteWorkEnd});
   await saveSites();
   document.getElementById('newSiteName').value='';
   document.getElementById('newSiteLat').value='';
   document.getElementById('newSiteLng').value='';
   document.getElementById('newSiteRadius').value='300';
+  document.getElementById('newSiteWorkStart').value='07:00';
+  document.getElementById('newSiteWorkEnd').value='16:00';
   refreshAdmin();
   showToast('تم إضافة الموقع');
 }
@@ -931,25 +954,47 @@ async function updateSiteRadius(id, val){
   showToast('تم تحديث نطاق GPS لـ ' + site.name);
 }
 
+async function updateSiteSchedule(id, field, val){
+  const site = sites.find(s=>s.id===id);
+  if(!site || !val) return;
+  site[field] = val;
+  await saveSites();
+  renderReport();
+  renderStatGrid();
+  showToast('تم تحديث وقت الدوام لـ ' + site.name);
+}
+
 function renderSiteList(){
   const wrap = document.getElementById('siteList');
   if(!sites.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد مواقع مضافة</div>'; return; }
-  wrap.innerHTML = sites.map(s=>`
+  wrap.innerHTML = sites.map(s=>{
+    const ws = s.workStart || workStart;
+    const we = s.workEnd || workEnd;
+    return `
     <div class="site-list-item">
       <div class="info">
         <b>${s.name}</b>
-        <span>Lat: ${s.lat.toFixed(5)} · Lng: ${s.lng.toFixed(5)}</span>
+        <span>Lat: ${s.lat.toFixed(5)} · Lng: ${s.lng.toFixed(5)} · الدوام: ${ws} - ${we}</span>
       </div>
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <div style="display:flex; align-items:center; gap:6px;">
           <label style="margin:0; font-size:11px;">نطاق (م):</label>
-          <input type="number" value="${s.radius}" style="width:80px; padding:6px 8px; font-size:12px;"
+          <input type="number" value="${s.radius}" style="width:70px; padding:6px 8px; font-size:12px;"
             onchange="updateSiteRadius('${s.id}', this.value)">
+        </div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <label style="margin:0; font-size:11px;">من:</label>
+          <input type="time" value="${ws}" style="width:100px; padding:6px 8px; font-size:12px;"
+            onchange="updateSiteSchedule('${s.id}', 'workStart', this.value)">
+          <label style="margin:0; font-size:11px;">إلى:</label>
+          <input type="time" value="${we}" style="width:100px; padding:6px 8px; font-size:12px;"
+            onchange="updateSiteSchedule('${s.id}', 'workEnd', this.value)">
         </div>
         <button class="btn-ghost btn-sm" onclick="deleteSite('${s.id}')" style="color:#f18d84;">حذف</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // ---------- Employee management ----------
@@ -973,14 +1018,29 @@ async function deleteEmployee(id){
   populateEmployeeSelect();
 }
 
+async function updateEmployeeSite(empId, newSiteId){
+  const emp = employees.find(e=>e.id===empId);
+  if(!emp) return;
+  emp.siteId = newSiteId;
+  await saveEmployees();
+  showToast('تم تحديث موقع ' + emp.name);
+  renderEmpList();
+}
+
 function renderEmpList(){
   const wrap = document.getElementById('empList');
   if(!employees.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد موظفين مضافين</div>'; return; }
   wrap.innerHTML = employees.map(e=>{
-    const site = sites.find(s=>s.id===e.siteId);
+    const siteOptions = sites.map(s=>`<option value="${s.id}" ${s.id===e.siteId?'selected':''}>${s.name}</option>`).join('');
     return `<div class="emp-list-item">
-      <div><b>${e.name}</b><span>${site ? site.name : 'بدون موقع أساسي'}</span></div>
-      <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
+      <div><b>${e.name}</b></div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <select style="width:auto; min-width:150px; padding:6px 10px; font-size:12px;" onchange="updateEmployeeSite('${e.id}', this.value)">
+          <option value="">بدون موقع أساسي</option>
+          ${siteOptions}
+        </select>
+        <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1010,10 +1070,10 @@ function calcHoursWorked(firstInISO, lastOutISO){
   return ms / (1000*60*60);
 }
 
-function formatOvertime(hoursWorked, dateKey){
+function formatOvertime(hoursWorked, dateKey, siteId){
   if(hoursWorked === null) return '—';
   const onHoliday = dateKey && isHoliday(dateKey);
-  const ot = onHoliday ? hoursWorked : (hoursWorked - getStandardHoursPerDay());
+  const ot = onHoliday ? hoursWorked : (hoursWorked - getStandardHoursPerDay(siteId));
   if(ot <= 0) return '0:00';
   const h = Math.floor(ot);
   const m = Math.round((ot - h)*60);
@@ -1048,7 +1108,7 @@ function computeReportRows(){
       if(ins.length && !outs.length) status = 'partial';
       if(isHoliday(dateStr)) status = 'holiday';
       const hoursWorked = (ins.length && lastOutRec) ? calcHoursWorked(ins[0].timestamp, lastOutRec.timestamp) : null;
-      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn, lastOut, status, overtime: formatOvertime(hoursWorked, dateStr)});
+      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn, lastOut, status, overtime: formatOvertime(hoursWorked, dateStr, empRecords[0].siteId)});
     }else{
       // weekly/monthly: sum overtime across days present (holiday days = full hours as OT)
       const dayGroups = {};
@@ -1067,9 +1127,10 @@ function computeReportRows(){
           const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
           const lastOut = day.outs.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).slice(-1)[0];
           const hrs = calcHoursWorked(firstIn.timestamp, lastOut.timestamp);
+          const stdHrs = getStandardHoursPerDay(firstIn.siteId);
           if(hrs !== null){
             if(onHoliday) totalOTHours += hrs;
-            else if(hrs > getStandardHoursPerDay()) totalOTHours += (hrs - getStandardHoursPerDay());
+            else if(hrs > stdHrs) totalOTHours += (hrs - stdHrs);
           }
         }
       });
