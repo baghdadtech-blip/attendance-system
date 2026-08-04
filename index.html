@@ -1451,21 +1451,23 @@ function exportPDF(){
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تقرير الحضور - ${typeLabel}</title>
     <style>
-      body{font-family:'Segoe UI', Tahoma, Arial, sans-serif; padding:30px; color:#111;}
-      h1{font-size:20px; color:#0f1f38; margin-bottom:4px;}
-      h2{font-size:15px; color:#0f1f38; margin:24px 0 4px;}
-      .sub{color:#555; font-size:13px; margin-bottom:2px;}
-      table{width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;}
-      th{background:#0f1f38; color:#c9a227; padding:9px; text-align:right; font-size:12px;}
-      td{padding:8px 9px; border-bottom:1px solid #ddd;}
-      tr:nth-child(even){background:#f7f4ed;}
+      :root{ color-scheme: light; }
+      html, body{background:#ffffff !important;}
+      body{font-family:'Segoe UI', Tahoma, Arial, sans-serif; padding:30px; color:#111111 !important; background:#ffffff !important;}
+      h1{font-size:20px; color:#0f1f38 !important; margin-bottom:4px;}
+      h2{font-size:15px; color:#0f1f38 !important; margin:24px 0 4px;}
+      .sub{color:#555555 !important; font-size:13px; margin-bottom:2px;}
+      table{width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; background:#ffffff !important;}
+      th{background:#0f1f38 !important; color:#c9a227 !important; padding:9px; text-align:right; font-size:12px;}
+      td{padding:8px 9px; border-bottom:1px solid #ddd; color:#111111 !important; background:#ffffff !important;}
+      tr:nth-child(even) td{background:#f7f4ed !important;}
       .header-line{border-bottom:3px solid #c9a227; padding-bottom:14px; margin-bottom:6px;}
       .print-bar{
-        position:sticky; top:0; background:#fff; padding:12px 0; margin-bottom:10px;
+        position:sticky; top:0; background:#ffffff !important; padding:12px 0; margin-bottom:10px;
         border-bottom:1px solid #ddd; display:flex; gap:10px; z-index:10;
       }
       .print-btn{
-        background:#c9a227; color:#0f1f38; border:none; padding:12px 22px;
+        background:#c9a227 !important; color:#0f1f38 !important; border:none; padding:12px 22px;
         border-radius:8px; font-size:15px; font-weight:700; cursor:pointer;
       }
       @media print{
