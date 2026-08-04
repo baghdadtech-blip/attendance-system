@@ -480,31 +480,62 @@ let customHolidays = []; // array of 'YYYY-MM-DD'
 
 const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings'};
 
-// ---------- Storage helpers (localStorage — works on GitHub Pages / any static host) ----------
+// ---------- Supabase config ----------
+const SUPABASE_URL = 'https://ozqyvzbzhekvpqvkcnuq.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im96cXl2emJ6aGVrdnBxdmtjbnVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MjAzOTMsImV4cCI6MjEwMTM5NjM5M30.v4iKO905ciKBzipCfE43TCshr8WOs9uC9uaNxv77nEM';
+const SUPABASE_TABLE_URL = `${SUPABASE_URL}/rest/v1/attendance_data`;
+const SUPABASE_HEADERS = {
+  'apikey': SUPABASE_ANON_KEY,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json'
+};
+
+// ---------- Storage helpers (Supabase — shared across all devices/browsers) ----------
+async function supabaseGet(key){
+  try{
+    const res = await fetch(`${SUPABASE_TABLE_URL}?key=eq.${encodeURIComponent(key)}&select=value`, {
+      headers: SUPABASE_HEADERS
+    });
+    if(!res.ok) return null;
+    const data = await res.json();
+    return (data && data.length) ? data[0].value : null;
+  }catch(e){ console.error('Supabase get error', e); return null; }
+}
+
+async function supabaseSet(key, value){
+  try{
+    const res = await fetch(`${SUPABASE_TABLE_URL}`, {
+      method: 'POST',
+      headers: {...SUPABASE_HEADERS, 'Prefer': 'resolution=merge-duplicates'},
+      body: JSON.stringify({ key, value, updated_at: new Date().toISOString() })
+    });
+    return res.ok;
+  }catch(e){ console.error('Supabase set error', e); return false; }
+}
+
 async function loadData(){
   try{
-    const s = localStorage.getItem(STORAGE_KEYS.sites);
-    sites = s ? JSON.parse(s) : defaultSites();
+    const s = await supabaseGet(STORAGE_KEYS.sites);
+    sites = s ? s : defaultSites();
   }catch(e){ sites = defaultSites(); }
 
   try{
-    const e = localStorage.getItem(STORAGE_KEYS.employees);
-    employees = e ? JSON.parse(e) : defaultEmployees();
+    const e = await supabaseGet(STORAGE_KEYS.employees);
+    employees = e ? e : defaultEmployees();
   }catch(e){ employees = defaultEmployees(); }
 
   try{
-    const r = localStorage.getItem(STORAGE_KEYS.records);
-    records = r ? JSON.parse(r) : [];
+    const r = await supabaseGet(STORAGE_KEYS.records);
+    records = r ? r : [];
   }catch(e){ records = []; }
 
   try{
-    const st = localStorage.getItem(STORAGE_KEYS.settings);
+    const st = await supabaseGet(STORAGE_KEYS.settings);
     if(st){
-      const parsed = JSON.parse(st);
-      workStart = parsed.workStart || '09:00';
-      workEnd = parsed.workEnd || '17:00';
-      fridayIsHoliday = parsed.fridayIsHoliday !== undefined ? parsed.fridayIsHoliday : true;
-      customHolidays = parsed.customHolidays || [];
+      workStart = st.workStart || '09:00';
+      workEnd = st.workEnd || '17:00';
+      fridayIsHoliday = st.fridayIsHoliday !== undefined ? st.fridayIsHoliday : true;
+      customHolidays = st.customHolidays || [];
     }
   }catch(e){ /* keep defaults */ }
 
@@ -515,7 +546,8 @@ async function loadData(){
 }
 
 async function saveSettings(){
-  try{ localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({workStart, workEnd, fridayIsHoliday, customHolidays})); }catch(e){ showToast('خطأ بحفظ الإعدادات'); }
+  const ok = await supabaseSet(STORAGE_KEYS.settings, {workStart, workEnd, fridayIsHoliday, customHolidays});
+  if(!ok) showToast('خطأ بحفظ الإعدادات');
 }
 
 // standard work hours per day for a given site, falling back to global settings if the site has no schedule
@@ -542,13 +574,16 @@ function isHoliday(dateKey){
 }
 
 async function saveSites(){
-  try{ localStorage.setItem(STORAGE_KEYS.sites, JSON.stringify(sites)); }catch(e){ showToast('خطأ بحفظ المواقع'); }
+  const ok = await supabaseSet(STORAGE_KEYS.sites, sites);
+  if(!ok) showToast('خطأ بحفظ المواقع');
 }
 async function saveEmployees(){
-  try{ localStorage.setItem(STORAGE_KEYS.employees, JSON.stringify(employees)); }catch(e){ showToast('خطأ بحفظ الموظفين'); }
+  const ok = await supabaseSet(STORAGE_KEYS.employees, employees);
+  if(!ok) showToast('خطأ بحفظ الموظفين');
 }
 async function saveRecords(){
-  try{ localStorage.setItem(STORAGE_KEYS.records, JSON.stringify(records)); }catch(e){ showToast('خطأ بحفظ السجلات'); }
+  const ok = await supabaseSet(STORAGE_KEYS.records, records);
+  if(!ok) showToast('خطأ بحفظ السجلات');
 }
 
 function defaultSites(){
@@ -587,6 +622,7 @@ document.getElementById('navTabs').addEventListener('click', (e)=>{
       document.getElementById('adminLoginGate').style.display = 'none';
       document.getElementById('adminPanel').style.display = 'block';
       refreshAdmin();
+      applyRoleVisibility();
     }else{
       document.getElementById('adminLoginGate').style.display = 'block';
       document.getElementById('adminPanel').style.display = 'none';
@@ -595,24 +631,47 @@ document.getElementById('navTabs').addEventListener('click', (e)=>{
 });
 
 // ---------- Admin authentication ----------
-const ADMIN_CREDENTIALS = { username: 'admin', password: 'Draft2020@@' };
+const AUTH_CREDENTIALS = [
+  { username: 'admin', password: 'Draft2020@@', role: 'admin' },
+  { username: 'manager', password: 'Cool2020@@', role: 'manager' }
+];
 const ADMIN_SESSION_KEY = 'attendance_admin_session';
+const ADMIN_ROLE_KEY = 'attendance_admin_role';
 
 function isAdminAuthenticated(){
   return sessionStorage.getItem(ADMIN_SESSION_KEY) === 'true';
+}
+
+function getCurrentRole(){
+  return sessionStorage.getItem(ADMIN_ROLE_KEY) || null;
+}
+
+function applyRoleVisibility(){
+  const role = getCurrentRole();
+  const isManager = role === 'manager';
+  // hide everything except the overview + reports cards for managers
+  document.querySelectorAll('#adminPanel > .card').forEach(card=>{
+    const title = card.querySelector('.card-title');
+    const text = title ? title.textContent : '';
+    const isReportsOrOverview = text.includes('التقارير') || text.includes('نظرة عامة');
+    card.style.display = (isManager && !isReportsOrOverview) ? 'none' : '';
+  });
 }
 
 function adminLogin(){
   const u = document.getElementById('adminUsername').value.trim();
   const p = document.getElementById('adminPassword').value;
   const errBox = document.getElementById('adminLoginError');
-  if(u === ADMIN_CREDENTIALS.username && p === ADMIN_CREDENTIALS.password){
+  const match = AUTH_CREDENTIALS.find(c => c.username === u && c.password === p);
+  if(match){
     sessionStorage.setItem(ADMIN_SESSION_KEY, 'true');
+    sessionStorage.setItem(ADMIN_ROLE_KEY, match.role);
     errBox.innerHTML = '';
     document.getElementById('adminLoginGate').style.display = 'none';
     document.getElementById('adminPanel').style.display = 'block';
     document.getElementById('adminPassword').value = '';
     refreshAdmin();
+    applyRoleVisibility();
   }else{
     errBox.innerHTML = '<div class="status-msg error">اسم المستخدم أو كلمة السر غير صحيحة</div>';
   }
@@ -620,6 +679,7 @@ function adminLogin(){
 
 function adminLogout(){
   sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  sessionStorage.removeItem(ADMIN_ROLE_KEY);
   document.getElementById('adminLoginGate').style.display = 'block';
   document.getElementById('adminPanel').style.display = 'none';
   document.getElementById('adminUsername').value = '';
@@ -738,6 +798,13 @@ async function recordAttendance(type){
     dateKey: todayKey(now),
     distance: currentGPS ? Math.round(haversineDistance(currentGPS.lat,currentGPS.lng,site.lat,site.lng)) : null
   };
+
+  // re-fetch the latest records first to avoid overwriting entries added from other devices
+  try{
+    const latest = await supabaseGet(STORAGE_KEYS.records);
+    if(latest) records = latest;
+  }catch(e){ /* fall back to in-memory records */ }
+
   records.push(rec);
   await saveRecords();
 
@@ -844,7 +911,19 @@ function renderHolidayList(){
   }).join('');
 }
 
-function refreshAdmin(){
+async function refreshAdmin(){
+  // pull the latest data in case other devices (employees/other admins) added anything
+  try{
+    const [s, e, r] = await Promise.all([
+      supabaseGet(STORAGE_KEYS.sites),
+      supabaseGet(STORAGE_KEYS.employees),
+      supabaseGet(STORAGE_KEYS.records)
+    ]);
+    if(s) sites = s;
+    if(e) employees = e;
+    if(r) records = r;
+  }catch(err){ /* keep current in-memory data if fetch fails */ }
+
   populateReportSiteFilter();
   populateEmpSiteSelect();
   if(!document.getElementById('reportDate').value){
