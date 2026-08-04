@@ -282,7 +282,6 @@
         <div class="clock-time" id="liveClock">--:--:--</div>
         <div class="clock-date" id="liveDate">-- -- ----</div>
         <div style="margin-top:14px; color:var(--gold-400); font-weight:700; font-size:15px;" id="welcomeMsg"></div>
-        <button class="btn-ghost btn-sm" style="margin-top:12px; width:auto; padding:6px 16px;" onclick="logoutEmployee()">تبديل المستخدم</button>
       </div>
 
       <div class="card">
@@ -1344,6 +1343,7 @@ function exportPDF(){
     <html lang="ar" dir="rtl">
     <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تقرير الحضور - ${typeLabel}</title>
     <style>
       body{font-family:'Segoe UI', Tahoma, Arial, sans-serif; padding:30px; color:#111;}
@@ -1354,10 +1354,24 @@ function exportPDF(){
       td{padding:8px 9px; border-bottom:1px solid #ddd;}
       tr:nth-child(even){background:#f7f4ed;}
       .header-line{border-bottom:3px solid #c9a227; padding-bottom:14px; margin-bottom:6px;}
-      @media print{ body{padding:10px;} }
+      .print-bar{
+        position:sticky; top:0; background:#fff; padding:12px 0; margin-bottom:10px;
+        border-bottom:1px solid #ddd; display:flex; gap:10px; z-index:10;
+      }
+      .print-btn{
+        background:#c9a227; color:#0f1f38; border:none; padding:12px 22px;
+        border-radius:8px; font-size:15px; font-weight:700; cursor:pointer;
+      }
+      @media print{
+        .print-bar{ display:none; }
+        body{padding:10px;}
+      }
     </style>
     </head>
     <body>
+      <div class="print-bar">
+        <button class="print-btn" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
+      </div>
       <div class="header-line">
         <h1>أمين بناء للمقاولات — تقرير الحضور والانصراف</h1>
         <div class="sub">نوع التقرير: ${typeLabel} &nbsp;|&nbsp; الفترة: ${range.label}</div>
@@ -1371,7 +1385,10 @@ function exportPDF(){
     </html>
   `);
   printWin.document.close();
-  printWin.onload = () => { printWin.focus(); printWin.print(); };
+  // best-effort auto print; if the browser blocks it, the visible button above still works
+  setTimeout(()=>{
+    try{ printWin.focus(); printWin.print(); }catch(e){ /* user can use the visible print button */ }
+  }, 300);
 }
 
 // ============================================================
