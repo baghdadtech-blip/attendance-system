@@ -391,7 +391,7 @@
         </div>
       </div>
       <div class="btn-row" style="margin-bottom:16px;">
-        <button class="btn btn-gold btn-sm" onclick="exportPDF()">⬇ تصدير PDF</button>
+        <button class="btn btn-gold btn-sm" onclick="exportPDF()">🖨️ طباعة / تصدير PDF</button>
       </div>
       <div class="table-wrap">
         <table id="reportTable">
@@ -480,27 +480,27 @@ let customHolidays = []; // array of 'YYYY-MM-DD'
 
 const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings'};
 
-// ---------- Storage helpers ----------
+// ---------- Storage helpers (localStorage — works on GitHub Pages / any static host) ----------
 async function loadData(){
   try{
-    const s = await window.storage.get(STORAGE_KEYS.sites, true);
-    sites = s ? JSON.parse(s.value) : defaultSites();
+    const s = localStorage.getItem(STORAGE_KEYS.sites);
+    sites = s ? JSON.parse(s) : defaultSites();
   }catch(e){ sites = defaultSites(); }
 
   try{
-    const e = await window.storage.get(STORAGE_KEYS.employees, true);
-    employees = e ? JSON.parse(e.value) : defaultEmployees();
+    const e = localStorage.getItem(STORAGE_KEYS.employees);
+    employees = e ? JSON.parse(e) : defaultEmployees();
   }catch(e){ employees = defaultEmployees(); }
 
   try{
-    const r = await window.storage.get(STORAGE_KEYS.records, true);
-    records = r ? JSON.parse(r.value) : [];
+    const r = localStorage.getItem(STORAGE_KEYS.records);
+    records = r ? JSON.parse(r) : [];
   }catch(e){ records = []; }
 
   try{
-    const st = await window.storage.get(STORAGE_KEYS.settings, true);
+    const st = localStorage.getItem(STORAGE_KEYS.settings);
     if(st){
-      const parsed = JSON.parse(st.value);
+      const parsed = JSON.parse(st);
       workStart = parsed.workStart || '09:00';
       workEnd = parsed.workEnd || '17:00';
       fridayIsHoliday = parsed.fridayIsHoliday !== undefined ? parsed.fridayIsHoliday : true;
@@ -515,7 +515,7 @@ async function loadData(){
 }
 
 async function saveSettings(){
-  try{ await window.storage.set(STORAGE_KEYS.settings, JSON.stringify({workStart, workEnd, fridayIsHoliday, customHolidays}), true); }catch(e){ showToast('خطأ بحفظ الإعدادات'); }
+  try{ localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({workStart, workEnd, fridayIsHoliday, customHolidays})); }catch(e){ showToast('خطأ بحفظ الإعدادات'); }
 }
 
 // standard work hours per day for a given site, falling back to global settings if the site has no schedule
@@ -542,13 +542,13 @@ function isHoliday(dateKey){
 }
 
 async function saveSites(){
-  try{ await window.storage.set(STORAGE_KEYS.sites, JSON.stringify(sites), true); }catch(e){ showToast('خطأ بحفظ المواقع'); }
+  try{ localStorage.setItem(STORAGE_KEYS.sites, JSON.stringify(sites)); }catch(e){ showToast('خطأ بحفظ المواقع'); }
 }
 async function saveEmployees(){
-  try{ await window.storage.set(STORAGE_KEYS.employees, JSON.stringify(employees), true); }catch(e){ showToast('خطأ بحفظ الموظفين'); }
+  try{ localStorage.setItem(STORAGE_KEYS.employees, JSON.stringify(employees)); }catch(e){ showToast('خطأ بحفظ الموظفين'); }
 }
 async function saveRecords(){
-  try{ await window.storage.set(STORAGE_KEYS.records, JSON.stringify(records), true); }catch(e){ showToast('خطأ بحفظ السجلات'); }
+  try{ localStorage.setItem(STORAGE_KEYS.records, JSON.stringify(records)); }catch(e){ showToast('خطأ بحفظ السجلات'); }
 }
 
 function defaultSites(){
