@@ -273,6 +273,7 @@
           <select id="employeeSelect"></select>
         </div>
         <button class="btn btn-gold" onclick="loginEmployee()">متابعة</button>
+        <div id="loginError"></div>
       </div>
     </div>
 
@@ -355,7 +356,7 @@
       </div>
       <div style="display:flex; align-items:center; gap:10px; margin:12px 0 18px; padding:12px 14px; background:var(--navy-900); border-radius:10px;">
         <input type="checkbox" id="fridayHolidayCheck" style="width:auto;" onchange="toggleFridayHoliday(this.checked)">
-        <label style="margin:0; font-size:13px; color:#fff;" for="fridayHolidayCheck">يوم الجمعة يُعتبر عطلة رسمية (أي دوام فيها يُحسب أوفرتايم كامل من أول ساعة)</label>
+        <label style="margin:0; font-size:13px; color:#fff;" for="fridayHolidayCheck">يوم الجمعة يُعتبر عطلة رسمية (أي دوام فيها يُحسب وقت إضافي كامل من أول ساعة)</label>
       </div>
       <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px; font-weight:600;">عطل إضافية (أعياد، مناسبات رسمية...)</div>
       <div class="site-manage-row">
@@ -395,7 +396,7 @@
       </div>
       <div class="table-wrap">
         <table id="reportTable">
-          <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>أوفرتايم</th><th>الحالة</th></tr></thead>
+          <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
           <tbody id="reportBody"></tbody>
         </table>
       </div>
@@ -694,16 +695,56 @@ function tickClock(){
 }
 setInterval(tickClock, 1000);
 
+// ---------- Device binding ----------
+function getDeviceId(){
+  let id = localStorage.getItem('attendance_device_id');
+  if(!id){
+    id = 'dev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('attendance_device_id', id);
+  }
+  return id;
+}
+
 // ---------- Employee login ----------
 function populateEmployeeSelect(){
   const sel = document.getElementById('employeeSelect');
   sel.innerHTML = employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
 }
 
-function loginEmployee(){
+async function loginEmployee(){
   const id = document.getElementById('employeeSelect').value;
-  currentEmployee = employees.find(e=>e.id===id);
-  if(!currentEmployee) return;
+  const emp = employees.find(e=>e.id===id);
+  if(!emp) return;
+
+  const errBox = document.getElementById('loginError');
+  if(errBox) errBox.innerHTML = '';
+
+  const myDeviceId = getDeviceId();
+
+  // re-fetch latest employees to check device binding accurately across devices
+  try{
+    const latest = await supabaseGet(STORAGE_KEYS.employees);
+    if(latest) employees = latest;
+  }catch(e){ /* fall back to in-memory list */ }
+
+  const empLatest = employees.find(e=>e.id===id);
+  if(!empLatest) return;
+
+  if(empLatest.deviceId && empLatest.deviceId !== myDeviceId){
+    // this employee is already bound to a different device — block impersonation
+    if(errBox){
+      errBox.innerHTML = `<div class="status-msg error">هذا الاسم مرتبط بموبايل آخر. لا يمكنك تسجيل الحضور باسم موظف غيرك من هذا الجهاز. إذا كان هذا خطأ (موبايل جديد)، تواصل مع الإدارة.</div>`;
+    }
+    return;
+  }
+
+  if(!empLatest.deviceId){
+    // first login on this device — bind permanently
+    empLatest.deviceId = myDeviceId;
+    await saveEmployees();
+  }
+
+  currentEmployee = empLatest;
   document.getElementById('loginGate').style.display = 'none';
   document.getElementById('clockPanel').style.display = 'block';
   document.getElementById('welcomeMsg').textContent = 'مرحباً، ' + currentEmployee.name;
@@ -832,7 +873,7 @@ function renderTodayLog(){
     const hrs = calcHoursWorked(ins[0].timestamp, outs[outs.length-1].timestamp);
     if(hrs !== null){
       const wh = Math.floor(hrs), wm = Math.round((hrs-wh)*60);
-      const otLabel = todayHoliday ? `أوفرتايم (عطلة): ${formatOvertime(hrs, today, ins[0].siteId)}` : `أوفرتايم: ${formatOvertime(hrs, today, ins[0].siteId)}`;
+      const otLabel = todayHoliday ? `وقت إضافي (عطلة): ${formatOvertime(hrs, today, ins[0].siteId)}` : `وقت إضافي: ${formatOvertime(hrs, today, ins[0].siteId)}`;
       summaryHtml = `<div class="log-row" style="border:1px solid var(--gold-500); background:rgba(201,162,39,.08);">
         <span>إجمالي ساعات العمل اليوم: ${wh}:${String(wm).padStart(2,'0')}${todayHoliday?' (يوم عطلة)':''}</span>
         <span class="log-tag" style="background:rgba(201,162,39,.2); color:var(--gold-300);">${otLabel}</span>
@@ -840,7 +881,7 @@ function renderTodayLog(){
     }
   }else if(todayHoliday){
     summaryHtml = `<div class="log-row" style="border:1px solid var(--gold-500); background:rgba(201,162,39,.08);">
-      <span>اليوم عطلة رسمية — أي ساعة عمل تُحسب أوفرتايم كامل</span>
+      <span>اليوم عطلة رسمية — أي ساعة عمل تُحسب وقت إضافي كامل</span>
       <span class="log-tag" style="background:rgba(201,162,39,.2); color:var(--gold-300);">عطلة</span>
     </div>`;
   }
@@ -972,7 +1013,7 @@ function renderStatGrid(){
     <div class="stat-box"><div class="stat-num" style="color:#5fd68a">${present}</div><div class="stat-label">حاضر اليوم</div></div>
     <div class="stat-box"><div class="stat-num" style="color:#f18d84">${absent}</div><div class="stat-label">غائب اليوم</div></div>
     <div class="stat-box"><div class="stat-num">${sites.length}</div><div class="stat-label">عدد المواقع</div></div>
-    <div class="stat-box"><div class="stat-num" style="color:var(--gold-400)">${otH}:${String(otM).padStart(2,'0')}</div><div class="stat-label">${todayIsHoliday ? 'أوفرتايم اليوم (عطلة)' : 'إجمالي أوفرتايم اليوم'}</div></div>
+    <div class="stat-box"><div class="stat-num" style="color:var(--gold-400)">${otH}:${String(otM).padStart(2,'0')}</div><div class="stat-label">${todayIsHoliday ? 'وقت إضافي اليوم (عطلة)' : 'إجمالي وقت إضافي اليوم'}</div></div>
   `;
 }
 
@@ -1106,18 +1147,32 @@ async function updateEmployeeSite(empId, newSiteId){
   renderEmpList();
 }
 
+async function unbindEmployeeDevice(empId){
+  const emp = employees.find(e=>e.id===empId);
+  if(!emp) return;
+  if(!confirm(`إلغاء ربط الموبايل الحالي لـ ${emp.name}؟ سيتمكن من تسجيل الدخول من موبايل جديد بعدها.`)) return;
+  emp.deviceId = null;
+  await saveEmployees();
+  showToast('تم إلغاء ربط الموبايل لـ ' + emp.name);
+  renderEmpList();
+}
+
 function renderEmpList(){
   const wrap = document.getElementById('empList');
   if(!employees.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد موظفين مضافين</div>'; return; }
   wrap.innerHTML = employees.map(e=>{
     const siteOptions = sites.map(s=>`<option value="${s.id}" ${s.id===e.siteId?'selected':''}>${s.name}</option>`).join('');
+    const deviceBadge = e.deviceId
+      ? `<span style="font-size:10px; color:#5fd68a; background:rgba(47,158,91,.15); padding:2px 8px; border-radius:10px;">مربوط بموبايل</span>`
+      : `<span style="font-size:10px; color:var(--text-dim); background:rgba(255,255,255,.06); padding:2px 8px; border-radius:10px;">غير مربوط</span>`;
     return `<div class="emp-list-item">
-      <div><b>${e.name}</b></div>
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div><b>${e.name}</b><span style="margin-top:4px; display:inline-block;">${deviceBadge}</span></div>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <select style="width:auto; min-width:150px; padding:6px 10px; font-size:12px;" onchange="updateEmployeeSite('${e.id}', this.value)">
           <option value="">بدون موقع أساسي</option>
           ${siteOptions}
         </select>
+        ${e.deviceId ? `<button class="btn-ghost btn-sm" onclick="unbindEmployeeDevice('${e.id}')" style="color:var(--gold-300);">إلغاء ربط الموبايل</button>` : ''}
         <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
       </div>
     </div>`;
@@ -1305,7 +1360,7 @@ function exportPDF(){
         <div class="sub">الموقع: ${siteName} &nbsp;|&nbsp; تاريخ الإصدار: ${new Date().toLocaleDateString('ar-IQ')}</div>
       </div>
       <table>
-        <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>أوفرتايم</th><th>الحالة</th></tr></thead>
+        <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
         <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
       </table>
     </body>
