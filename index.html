@@ -1235,12 +1235,31 @@ async function reviewLeaveRequest(reqId, newStatus){
 
 function renderStatGrid(){
   const today = todayKey();
+  const now = new Date();
   const todayRecs = records.filter(r=>r.dateKey===today);
   const presentEmpIds = new Set(todayRecs.filter(r=>r.type==='in').map(r=>r.empId));
   const totalEmp = employees.length;
-  const present = presentEmpIds.size;
-  const absent = totalEmp - present;
   const todayIsHoliday = isHoliday(today);
+
+  let present = 0;
+  let onLeave = 0;
+  let absent = 0;
+  let awaiting = 0; // shift hasn't started yet for this employee's site
+
+  employees.forEach(emp=>{
+    if(presentEmpIds.has(emp.id)){ present++; return; }
+    if(todayIsHoliday) return; // holidays aren't counted as absent/awaiting
+    if(getApprovedLeaveForDate(emp.id, today)){ onLeave++; return; }
+
+    const site = sites.find(s=>s.id===emp.siteId);
+    const schedStart = (site && site.workStart) ? site.workStart : workStart;
+    const [sh, sm] = schedStart.split(':').map(Number);
+    const scheduledStart = new Date(now);
+    scheduledStart.setHours(sh, sm, 0, 0);
+
+    if(now < scheduledStart) awaiting++;
+    else absent++;
+  });
 
   // total overtime today across all employees who have both in & out (holiday = full hours as OT)
   let totalOTHours = 0;
@@ -1264,7 +1283,9 @@ function renderStatGrid(){
   grid.innerHTML = `
     <div class="stat-box"><div class="stat-num">${totalEmp}</div><div class="stat-label">إجمالي الموظفين</div></div>
     <div class="stat-box"><div class="stat-num" style="color:#5fd68a">${present}</div><div class="stat-label">حاضر اليوم</div></div>
+    <div class="stat-box"><div class="stat-num" style="color:#8fb8f0">${onLeave}</div><div class="stat-label">إجازة اليوم</div></div>
     <div class="stat-box"><div class="stat-num" style="color:#f18d84">${absent}</div><div class="stat-label">غائب اليوم</div></div>
+    <div class="stat-box"><div class="stat-num" style="color:var(--text-dim)">${awaiting}</div><div class="stat-label">بانتظار بدء الدوام</div></div>
     <div class="stat-box"><div class="stat-num">${sites.length}</div><div class="stat-label">عدد المواقع</div></div>
     <div class="stat-box"><div class="stat-num" style="color:var(--gold-400)">${otH}:${String(otM).padStart(2,'0')}</div><div class="stat-label">${todayIsHoliday ? 'وقت إضافي اليوم (عطلة)' : 'إجمالي وقت إضافي اليوم'}</div></div>
   `;
