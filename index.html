@@ -282,6 +282,7 @@
         <div class="clock-time" id="liveClock">--:--:--</div>
         <div class="clock-date" id="liveDate">-- -- ----</div>
         <div style="margin-top:14px; color:var(--gold-400); font-weight:700; font-size:15px;" id="welcomeMsg"></div>
+        <button class="btn-ghost btn-sm" style="margin-top:12px; width:auto; padding:6px 16px;" onclick="manualRefreshEmployee()">🔄 تحديث</button>
       </div>
 
       <div class="card">
@@ -1069,6 +1070,29 @@ function renderMyLeaveRequests(){
       ${leaveStatusBadge(r.status)}
     </div>`;
   }).join('');
+}
+
+async function manualRefreshEmployee(){
+  if(!currentEmployee) return;
+  showToast('🔄 جارِ التحديث...');
+  try{
+    const [s, r, lr] = await Promise.all([
+      supabaseGet(STORAGE_KEYS.sites),
+      supabaseGet(STORAGE_KEYS.records),
+      supabaseGet(STORAGE_KEYS.leaveRequests)
+    ]);
+    if(s) sites = s;
+    if(r) records = r;
+    if(lr) leaveRequests = lr;
+  }catch(e){ showToast('تعذر التحديث، تحقق من الاتصال'); return; }
+
+  populateSiteSelect();
+  const siteSel = document.getElementById('siteSelect');
+  if(currentEmployee.siteId) siteSel.value = currentEmployee.siteId;
+  renderTodayLog();
+  renderMyLeaveRequests();
+  checkGPS();
+  showToast('✅ تم التحديث');
 }
 
 async function updateWorkSchedule(){
