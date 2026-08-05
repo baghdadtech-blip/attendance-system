@@ -305,6 +305,42 @@
         <div class="card-title">سجل اليوم</div>
         <div id="todayLogList"><div class="empty-state"><div class="icon">🕐</div>لا يوجد تسجيلات اليوم بعد</div></div>
       </div>
+
+      <div class="card">
+        <div class="card-title">🗓️ طلب إجازة زمنية</div>
+        <div class="field">
+          <label>نوع الطلب</label>
+          <select id="leaveType" onchange="toggleLeaveHoursField()">
+            <option value="full">يوم كامل (أو أكثر)</option>
+            <option value="partial">ساعات جزئية بنفس اليوم</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>من تاريخ</label>
+          <input type="date" id="leaveStartDate">
+        </div>
+        <div class="field" id="leaveEndDateField">
+          <label>إلى تاريخ</label>
+          <input type="date" id="leaveEndDate">
+        </div>
+        <div class="field" id="leaveHoursField" style="display:none;">
+          <label>من الساعة</label>
+          <input type="time" id="leaveStartTime">
+          <label style="margin-top:10px;">إلى الساعة</label>
+          <input type="time" id="leaveEndTime">
+        </div>
+        <div class="field">
+          <label>السبب (اختياري)</label>
+          <input type="text" id="leaveReason" placeholder="مثال: ظرف عائلي">
+        </div>
+        <button class="btn btn-gold" onclick="submitLeaveRequest()">إرسال الطلب للإدارة</button>
+        <div id="leaveSubmitMsg"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📋 طلباتي</div>
+        <div id="myLeaveRequests"><div class="empty-state">لا يوجد طلبات مقدّمة</div></div>
+      </div>
     </div>
   </div>
 
@@ -336,9 +372,17 @@
     <div class="card">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
         <span>نظرة عامة - اليوم</span>
-        <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="adminLogout()">تسجيل خروج الإدارة</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="manualRefreshAdmin()">🔄 تحديث البيانات</button>
+          <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="adminLogout()">تسجيل خروج الإدارة</button>
+        </div>
       </div>
       <div class="stat-grid" id="statGrid"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🗓️ طلبات الإجازة الزمنية</div>
+      <div id="leaveRequestsList"><div class="empty-state">لا يوجد طلبات</div></div>
     </div>
 
     <div class="card">
@@ -396,7 +440,7 @@
       <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📋 ملخص الفترة (لكل موظف)</div>
       <div class="table-wrap" style="margin-bottom:20px;">
         <table id="summaryTable">
-          <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>إجمالي وقت إضافي</th></tr></thead>
+          <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>أيام إجازة</th><th>إجمالي وقت إضافي</th></tr></thead>
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
@@ -486,7 +530,8 @@ let workEnd = '17:00';
 let fridayIsHoliday = true;
 let customHolidays = []; // array of 'YYYY-MM-DD'
 
-const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings'};
+const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings', leaveRequests:'attendance:leaveRequests'};
+let leaveRequests = [];
 
 // ---------- Supabase config ----------
 const SUPABASE_URL = 'https://ozqyvzbzhekvpqvkcnuq.supabase.co';
@@ -540,6 +585,11 @@ async function loadData(){
     const r = await supabaseGet(STORAGE_KEYS.records);
     records = r ? r : [];
   }catch(e){ records = []; }
+
+  try{
+    const lr = await supabaseGet(STORAGE_KEYS.leaveRequests);
+    leaveRequests = lr ? lr : [];
+  }catch(e){ leaveRequests = []; }
 
   try{
     const st = await supabaseGet(STORAGE_KEYS.settings);
@@ -596,6 +646,10 @@ async function saveEmployees(){
 async function saveRecords(){
   const ok = await supabaseSet(STORAGE_KEYS.records, records);
   if(!ok) showToast('خطأ بحفظ السجلات');
+}
+async function saveLeaveRequests(){
+  const ok = await supabaseSet(STORAGE_KEYS.leaveRequests, leaveRequests);
+  if(!ok) showToast('خطأ بحفظ طلبات الإجازة');
 }
 
 function defaultSites(){
@@ -765,6 +819,15 @@ async function loginEmployee(){
   if(currentEmployee.siteId) siteSel.value = currentEmployee.siteId;
   renderTodayLog();
   checkGPS();
+
+  // refresh leave requests and default the request date to today
+  try{
+    const latestLR = await supabaseGet(STORAGE_KEYS.leaveRequests);
+    if(latestLR) leaveRequests = latestLR;
+  }catch(e){ /* keep in-memory */ }
+  document.getElementById('leaveStartDate').value = todayKey();
+  document.getElementById('leaveEndDate').value = todayKey();
+  renderMyLeaveRequests();
 }
 
 function logoutEmployee(){
@@ -910,8 +973,103 @@ function renderTodayLog(){
 }
 
 // ============================================================
-// ADMIN PANEL
+// LEAVE REQUESTS (employee side)
 // ============================================================
+
+function toggleLeaveHoursField(){
+  const type = document.getElementById('leaveType').value;
+  document.getElementById('leaveHoursField').style.display = type === 'partial' ? 'block' : 'none';
+  document.getElementById('leaveEndDateField').style.display = type === 'partial' ? 'none' : 'block';
+}
+
+async function submitLeaveRequest(){
+  if(!currentEmployee) return;
+  const type = document.getElementById('leaveType').value;
+  const startDate = document.getElementById('leaveStartDate').value;
+  const reason = document.getElementById('leaveReason').value.trim();
+  const msgBox = document.getElementById('leaveSubmitMsg');
+
+  if(!startDate){
+    msgBox.innerHTML = '<div class="status-msg error">الرجاء تحديد التاريخ</div>';
+    return;
+  }
+
+  const req = {
+    id: uid('lr'),
+    empId: currentEmployee.id,
+    empName: currentEmployee.name,
+    type,
+    startDate,
+    reason,
+    status: 'pending', // pending | approved | rejected
+    createdAt: new Date().toISOString(),
+    reviewedAt: null,
+    reviewedBy: null
+  };
+
+  if(type === 'full'){
+    const endDate = document.getElementById('leaveEndDate').value || startDate;
+    if(endDate < startDate){
+      msgBox.innerHTML = '<div class="status-msg error">تاريخ النهاية لا يمكن أن يكون قبل تاريخ البداية</div>';
+      return;
+    }
+    req.endDate = endDate;
+  }else{
+    const startTime = document.getElementById('leaveStartTime').value;
+    const endTime = document.getElementById('leaveEndTime').value;
+    if(!startTime || !endTime){
+      msgBox.innerHTML = '<div class="status-msg error">الرجاء تحديد وقت البداية والنهاية</div>';
+      return;
+    }
+    if(endTime <= startTime){
+      msgBox.innerHTML = '<div class="status-msg error">وقت النهاية يجب أن يكون بعد وقت البداية</div>';
+      return;
+    }
+    req.endDate = startDate;
+    req.startTime = startTime;
+    req.endTime = endTime;
+  }
+
+  // re-fetch latest requests before appending to avoid overwriting others
+  try{
+    const latest = await supabaseGet(STORAGE_KEYS.leaveRequests);
+    if(latest) leaveRequests = latest;
+  }catch(e){ /* fall back to in-memory */ }
+
+  leaveRequests.push(req);
+  await saveLeaveRequests();
+
+  msgBox.innerHTML = '<div class="status-msg success">تم إرسال الطلب للإدارة بنجاح</div>';
+  setTimeout(()=>msgBox.innerHTML='', 4000);
+  document.getElementById('leaveReason').value = '';
+  renderMyLeaveRequests();
+  showToast('✅ تم إرسال طلب الإجازة');
+}
+
+function leaveStatusBadge(status){
+  if(status==='approved') return '<span class="badge present">موافق عليه</span>';
+  if(status==='rejected') return '<span class="badge absent">مرفوض</span>';
+  return '<span class="badge partial">قيد المراجعة</span>';
+}
+
+function renderMyLeaveRequests(){
+  if(!currentEmployee) return;
+  const wrap = document.getElementById('myLeaveRequests');
+  const mine = leaveRequests.filter(r=>r.empId===currentEmployee.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  if(!mine.length){
+    wrap.innerHTML = '<div class="empty-state">لا يوجد طلبات مقدّمة</div>';
+    return;
+  }
+  wrap.innerHTML = mine.map(r=>{
+    const dateLabel = r.type === 'full'
+      ? (r.startDate === r.endDate ? r.startDate : `${r.startDate} إلى ${r.endDate}`)
+      : `${r.startDate} (${r.startTime} - ${r.endTime})`;
+    return `<div class="log-row">
+      <span>${dateLabel}${r.reason ? ' · ' + r.reason : ''}</span>
+      ${leaveStatusBadge(r.status)}
+    </div>`;
+  }).join('');
+}
 
 async function updateWorkSchedule(){
   const s = document.getElementById('workStartInput').value;
@@ -969,14 +1127,16 @@ function renderHolidayList(){
 async function refreshAdmin(){
   // pull the latest data in case other devices (employees/other admins) added anything
   try{
-    const [s, e, r] = await Promise.all([
+    const [s, e, r, lr] = await Promise.all([
       supabaseGet(STORAGE_KEYS.sites),
       supabaseGet(STORAGE_KEYS.employees),
-      supabaseGet(STORAGE_KEYS.records)
+      supabaseGet(STORAGE_KEYS.records),
+      supabaseGet(STORAGE_KEYS.leaveRequests)
     ]);
     if(s) sites = s;
     if(e) employees = e;
     if(r) records = r;
+    if(lr) leaveRequests = lr;
   }catch(err){ /* keep current in-memory data if fetch fails */ }
 
   populateReportSiteFilter();
@@ -991,7 +1151,62 @@ async function refreshAdmin(){
   renderSiteList();
   renderEmpList();
   renderHolidayList();
+  renderLeaveRequestsAdmin();
   renderReport();
+}
+
+async function manualRefreshAdmin(){
+  showToast('🔄 جارِ التحديث...');
+  await refreshAdmin();
+  showToast('✅ تم تحديث البيانات');
+}
+
+// ============================================================
+// LEAVE REQUESTS (admin side)
+// ============================================================
+
+function renderLeaveRequestsAdmin(){
+  const wrap = document.getElementById('leaveRequestsList');
+  if(!leaveRequests.length){
+    wrap.innerHTML = '<div class="empty-state">لا يوجد طلبات</div>';
+    return;
+  }
+  const sorted = [...leaveRequests].sort((a,b)=>{
+    // pending requests first, then most recent
+    if(a.status === 'pending' && b.status !== 'pending') return -1;
+    if(a.status !== 'pending' && b.status === 'pending') return 1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+  wrap.innerHTML = sorted.map(r=>{
+    const dateLabel = r.type === 'full'
+      ? (r.startDate === r.endDate ? r.startDate : `${r.startDate} إلى ${r.endDate}`)
+      : `${r.startDate} (${r.startTime} - ${r.endTime})`;
+    const actions = r.status === 'pending'
+      ? `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','approved')" style="color:#5fd68a;">✓ موافقة</button>
+         <button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','rejected')" style="color:#f18d84;">✗ رفض</button>`
+      : `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','pending')" style="color:var(--text-dim);">إعادة للمراجعة</button>`;
+    return `<div class="site-list-item">
+      <div class="info">
+        <b>${r.empName}</b>
+        <span>${dateLabel}${r.reason ? ' · ' + r.reason : ''}</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        ${leaveStatusBadge(r.status)}
+        ${actions}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function reviewLeaveRequest(reqId, newStatus){
+  const req = leaveRequests.find(r=>r.id===reqId);
+  if(!req) return;
+  req.status = newStatus;
+  req.reviewedAt = new Date().toISOString();
+  req.reviewedBy = getCurrentRole();
+  await saveLeaveRequests();
+  renderLeaveRequestsAdmin();
+  showToast(newStatus === 'approved' ? '✅ تمت الموافقة على الطلب' : (newStatus === 'rejected' ? '❌ تم رفض الطلب' : 'تم إرجاع الطلب للمراجعة'));
 }
 
 function renderStatGrid(){
@@ -1273,6 +1488,16 @@ function formatOvertime(hoursWorked, dateKey, siteId){
   return `${h}:${String(m).padStart(2,'0')}`;
 }
 
+// returns the approved leave request covering this employee/date, or null
+function getApprovedLeaveForDate(empId, dateKey){
+  return leaveRequests.find(r=>
+    r.empId === empId &&
+    r.status === 'approved' &&
+    dateKey >= r.startDate &&
+    dateKey <= (r.endDate || r.startDate)
+  ) || null;
+}
+
 function computeReportRows(){
   const type = document.getElementById('reportType').value;
   const dateStr = document.getElementById('reportDate').value || todayKey();
@@ -1286,8 +1511,12 @@ function computeReportRows(){
     const empRecords = records.filter(r=>r.empId===emp.id && r.dateKey>=range.start && r.dateKey<=range.end && (siteFilter==='all' || r.siteId===siteFilter));
     if(!empRecords.length){
       const site = sites.find(s=>s.id===emp.siteId);
-      const st = (type==='daily' && isHoliday(dateStr)) ? 'holiday' : 'absent';
-      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn:'—', lastOut:'—', status:st, overtime:'—'});
+      const approvedLeave = (type==='daily') ? getApprovedLeaveForDate(emp.id, dateStr) : null;
+      let st;
+      if(type==='daily' && isHoliday(dateStr)) st = 'holiday';
+      else if(approvedLeave) st = 'leave';
+      else st = 'absent';
+      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn: approvedLeave ? (approvedLeave.type==='partial' ? `${approvedLeave.startTime}-${approvedLeave.endTime}` : 'إجازة') : '—', lastOut:'—', status:st, overtime:'—'});
       return;
     }
     if(type === 'daily'){
@@ -1299,6 +1528,14 @@ function computeReportRows(){
       const lastOut = lastOutRec ? new Date(lastOutRec.timestamp).toLocaleTimeString('ar-IQ',{hour:'2-digit',minute:'2-digit'}) : '—';
       let status = 'present';
       if(ins.length && !outs.length) status = 'partial';
+      if(status === 'present' && lastOutRec && !isHoliday(dateStr)){
+        const schedEnd = (site && site.workEnd) ? site.workEnd : workEnd;
+        const [eh, em] = schedEnd.split(':').map(Number);
+        const outDate = new Date(lastOutRec.timestamp);
+        const scheduledEnd = new Date(outDate);
+        scheduledEnd.setHours(eh, em, 0, 0);
+        if(outDate < scheduledEnd) status = 'early';
+      }
       if(isHoliday(dateStr)) status = 'holiday';
       const hoursWorked = (ins.length && lastOutRec) ? calcHoursWorked(ins[0].timestamp, lastOutRec.timestamp) : null;
       rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn, lastOut, status, overtime: formatOvertime(hoursWorked, dateStr, empRecords[0].siteId)});
@@ -1381,13 +1618,16 @@ function computeReportSummary(){
 
     let lateDays = 0;
     let absentDays = 0;
+    let leaveDays = 0;
     let totalOTHours = 0;
 
     allDates.forEach(dKey=>{
       const onHoliday = isHoliday(dKey);
+      const onLeave = getApprovedLeaveForDate(emp.id, dKey);
       const day = dayGroups[dKey];
       if(!day || !day.ins.length){
-        if(!onHoliday) absentDays++;
+        if(onLeave) leaveDays++;
+        else if(!onHoliday) absentDays++;
         return;
       }
       const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
@@ -1398,7 +1638,7 @@ function computeReportSummary(){
       const scheduledStart = new Date(inDate);
       scheduledStart.setHours(sh, sm, 0, 0);
       const minutesLate = (inDate - scheduledStart) / 60000;
-      if(!onHoliday && minutesLate > LATE_GRACE_MINUTES) lateDays++;
+      if(!onHoliday && !onLeave && minutesLate > LATE_GRACE_MINUTES) lateDays++;
 
       if(day.outs.length){
         const lastOut = day.outs.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).slice(-1)[0];
@@ -1417,6 +1657,7 @@ function computeReportSummary(){
       empName: emp.name,
       lateDays,
       absentDays,
+      leaveDays,
       overtime: `${otH}:${String(otM).padStart(2,'0')}`
     };
   });
@@ -1425,7 +1666,9 @@ function computeReportSummary(){
 function statusLabel(status){
   if(status==='present') return '<span class="badge present">حاضر</span>';
   if(status==='partial') return '<span class="badge partial">جزئي</span>';
+  if(status==='early') return '<span class="badge" style="background:rgba(217,164,65,.2); color:#f0c675;">انصراف مبكر</span>';
   if(status==='holiday') return '<span class="badge" style="background:rgba(201,162,39,.2); color:var(--gold-300);">عطلة</span>';
+  if(status==='leave') return '<span class="badge" style="background:rgba(95,145,214,.2); color:#8fb8f0;">إجازة</span>';
   return '<span class="badge absent">غائب</span>';
 }
 
@@ -1450,13 +1693,14 @@ function renderReport(){
   const summary = computeReportSummary();
   const summaryBody = document.getElementById('summaryBody');
   if(!summary.length){
-    summaryBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
+    summaryBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
   }else{
     summaryBody.innerHTML = summary.map(s=>`
       <tr>
         <td>${s.empName}</td>
         <td>${s.lateDays > 0 ? `<span class="badge partial">${s.lateDays}</span>` : '0'}</td>
         <td>${s.absentDays > 0 ? `<span class="badge absent">${s.absentDays}</span>` : '0'}</td>
+        <td>${s.leaveDays > 0 ? `<span class="badge" style="background:rgba(95,145,214,.2); color:#8fb8f0;">${s.leaveDays}</span>` : '0'}</td>
         <td>${s.overtime}</td>
       </tr>
     `).join('');
@@ -1477,6 +1721,7 @@ function exportPDF(){
       <td>${s.empName}</td>
       <td>${s.lateDays}</td>
       <td>${s.absentDays}</td>
+      <td>${s.leaveDays}</td>
       <td>${s.overtime}</td>
     </tr>`).join('');
 
@@ -1487,7 +1732,7 @@ function exportPDF(){
       <td>${r.firstIn}</td>
       <td>${r.lastOut}</td>
       <td>${r.overtime}</td>
-      <td>${r.status==='present'?'حاضر':(r.status==='partial'?'جزئي':(r.status==='holiday'?'عطلة':'غائب'))}</td>
+      <td>${r.status==='present'?'حاضر':(r.status==='partial'?'جزئي':(r.status==='early'?'انصراف مبكر':(r.status==='holiday'?'عطلة':(r.status==='leave'?'إجازة':'غائب'))))}</td>
     </tr>`).join('');
 
   const printWin = window.open('', '_blank');
@@ -1548,8 +1793,8 @@ function exportPDF(){
 
       <h2>📋 ملخص الفترة (لكل موظف)</h2>
       <table>
-        <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>إجمالي وقت إضافي</th></tr></thead>
-        <tbody>${summaryRowsHtml || '<tr><td colspan="4" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
+        <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>أيام إجازة</th><th>إجمالي وقت إضافي</th></tr></thead>
+        <tbody>${summaryRowsHtml || '<tr><td colspan="5" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
       </table>
 
       <h2>📄 التفاصيل اليومية</h2>
