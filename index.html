@@ -445,10 +445,10 @@
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
-      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📄 التفاصيل اليومية</div>
+      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;" id="detailSectionTitle">📄 التفاصيل اليومية</div>
       <div class="table-wrap">
         <table id="reportTable">
-          <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
+          <thead><tr><th>الموظف</th><th>الموقع</th><th id="colFirstIn">الحضور</th><th id="colLastOut">الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
           <tbody id="reportBody"></tbody>
         </table>
       </div>
@@ -1609,7 +1609,8 @@ function computeReportRows(){
           }
         }
       });
-      const totalDaysInRange = daysBetween(range.start, range.end);
+      const effectiveEnd = range.end > todayKey() ? todayKey() : range.end;
+      const totalDaysInRange = daysBetween(range.start, effectiveEnd);
       const site = sites.find(s=>s.id===emp.siteId);
       const otH = Math.floor(totalOTHours);
       const otM = Math.round((totalOTHours-otH)*60);
@@ -1665,8 +1666,10 @@ function computeReportSummary(){
     let absentDays = 0;
     let leaveDays = 0;
     let totalOTHours = 0;
+    const todayStr = todayKey();
 
     allDates.forEach(dKey=>{
+      if(dKey > todayStr) return; // skip future dates — they haven't happened yet
       const onHoliday = isHoliday(dKey);
       const onLeave = getApprovedLeaveForDate(emp.id, dKey);
       const day = dayGroups[dKey];
@@ -1718,6 +1721,20 @@ function statusLabel(status){
 }
 
 function renderReport(){
+  const type = document.getElementById('reportType').value;
+  const titleEl = document.getElementById('detailSectionTitle');
+  const colFirstIn = document.getElementById('colFirstIn');
+  const colLastOut = document.getElementById('colLastOut');
+  if(type === 'daily'){
+    titleEl.textContent = '📄 التفاصيل اليومية';
+    colFirstIn.textContent = 'الحضور';
+    colLastOut.textContent = 'الانصراف';
+  }else{
+    titleEl.textContent = '📄 تفاصيل أيام الحضور بالفترة (لكل موظف)';
+    colFirstIn.textContent = 'أيام حضور';
+    colLastOut.textContent = 'من إجمالي أيام الفترة';
+  }
+
   const {rows} = computeReportRows();
   const body = document.getElementById('reportBody');
   if(!rows.length){
@@ -1760,6 +1777,9 @@ function exportPDF(){
   const typeLabel = type==='daily'?'يومي':(type==='weekly'?'أسبوعي':'شهري');
   const siteFilter = document.getElementById('reportSite').value;
   const siteName = siteFilter==='all' ? 'كل المواقع' : (sites.find(s=>s.id===siteFilter)?.name || '—');
+  const detailTitle = type==='daily' ? '📄 التفاصيل اليومية' : '📄 تفاصيل أيام الحضور بالفترة (لكل موظف)';
+  const colFirstInLabel = type==='daily' ? 'الحضور' : 'أيام حضور';
+  const colLastOutLabel = type==='daily' ? 'الانصراف' : 'من إجمالي أيام الفترة';
 
   const summaryRowsHtml = summary.map(s=>`
     <tr>
@@ -1842,9 +1862,9 @@ function exportPDF(){
         <tbody>${summaryRowsHtml || '<tr><td colspan="5" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
       </table>
 
-      <h2>📄 التفاصيل اليومية</h2>
+      <h2>${detailTitle}</h2>
       <table>
-        <thead><tr><th>الموظف</th><th>الموقع</th><th>الحضور</th><th>الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
+        <thead><tr><th>الموظف</th><th>الموقع</th><th>${colFirstInLabel}</th><th>${colLastOutLabel}</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
         <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
       </table>
     </body>
