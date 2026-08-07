@@ -438,17 +438,10 @@
       <div class="btn-row" style="margin-bottom:16px;">
         <button class="btn btn-gold btn-sm" onclick="exportPDF()">🖨️ طباعة / تصدير PDF</button>
       </div>
-      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📋 ملخص الفترة (لكل موظف)</div>
-      <div class="table-wrap" style="margin-bottom:20px;">
-        <table id="summaryTable">
-          <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>أيام إجازة</th><th>إجمالي وقت إضافي</th></tr></thead>
-          <tbody id="summaryBody"></tbody>
-        </table>
-      </div>
-      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;" id="detailSectionTitle">📄 التفاصيل اليومية</div>
+      <div style="font-size:13px; font-weight:700; color:var(--gold-400); margin-bottom:10px;">📄 تقرير الحضور والانصراف</div>
       <div class="table-wrap">
         <table id="reportTable">
-          <thead><tr><th>الموظف</th><th>الموقع</th><th id="colFirstIn">الحضور</th><th id="colLastOut">الانصراف</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
+          <thead><tr><th>الموظف</th><th>الموقع</th><th id="colFirstIn">الحضور</th><th id="colLastOut">الانصراف</th><th>متأخر</th><th>إجازة</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
           <tbody id="reportBody"></tbody>
         </table>
       </div>
@@ -1543,6 +1536,8 @@ function getApprovedLeaveForDate(empId, dateKey){
   ) || null;
 }
 
+const LATE_GRACE_MINUTES = 15;
+
 function computeReportRows(){
   const type = document.getElementById('reportType').value;
   const dateStr = document.getElementById('reportDate').value || todayKey();
@@ -1561,7 +1556,7 @@ function computeReportRows(){
       if(type==='daily' && isHoliday(dateStr)) st = 'holiday';
       else if(approvedLeave) st = 'leave';
       else st = 'absent';
-      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn: approvedLeave ? (approvedLeave.type==='partial' ? `${approvedLeave.startTime}-${approvedLeave.endTime}` : 'إجازة') : '—', lastOut:'—', status:st, overtime:'—'});
+      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn: approvedLeave ? (approvedLeave.type==='partial' ? `${approvedLeave.startTime}-${approvedLeave.endTime}` : 'إجازة') : '—', lastOut:'—', late:'—', leave: approvedLeave ? 'نعم' : '—', status:st, overtime:'—'});
       return;
     }
     if(type === 'daily'){
@@ -1571,9 +1566,12 @@ function computeReportRows(){
       const firstIn = ins.length ? new Date(ins[0].timestamp).toLocaleTimeString('ar-IQ',{hour:'2-digit',minute:'2-digit'}) : '—';
       const lastOutRec = outs.length ? outs[outs.length-1] : null;
       const lastOut = lastOutRec ? new Date(lastOutRec.timestamp).toLocaleTimeString('ar-IQ',{hour:'2-digit',minute:'2-digit'}) : '—';
+      const onHoliday = isHoliday(dateStr);
+      const onLeave = getApprovedLeaveForDate(emp.id, dateStr);
+
       let status = 'present';
       if(ins.length && !outs.length) status = 'partial';
-      if(status === 'present' && lastOutRec && !isHoliday(dateStr)){
+      if(status === 'present' && lastOutRec && !onHoliday){
         const schedEnd = (site && site.workEnd) ? site.workEnd : workEnd;
         const [eh, em] = schedEnd.split(':').map(Number);
         const outDate = new Date(lastOutRec.timestamp);
@@ -1581,11 +1579,29 @@ function computeReportRows(){
         scheduledEnd.setHours(eh, em, 0, 0);
         if(outDate < scheduledEnd) status = 'early';
       }
-      if(isHoliday(dateStr)) status = 'holiday';
+      if(onHoliday) status = 'holiday';
+
+      // late detection
+      let isLate = false;
+      if(ins.length && !onHoliday && !onLeave){
+        const schedStart = (site && site.workStart) ? site.workStart : workStart;
+        const [sh, sm] = schedStart.split(':').map(Number);
+        const inDate = new Date(ins[0].timestamp);
+        const scheduledStart = new Date(inDate);
+        scheduledStart.setHours(sh, sm, 0, 0);
+        const minutesLate = (inDate - scheduledStart) / 60000;
+        if(minutesLate > LATE_GRACE_MINUTES) isLate = true;
+      }
+
       const hoursWorked = (ins.length && lastOutRec) ? calcHoursWorked(ins[0].timestamp, lastOutRec.timestamp) : null;
-      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn, lastOut, status, overtime: formatOvertime(hoursWorked, dateStr, empRecords[0].siteId)});
+      rows.push({
+        empName: emp.name, siteName: site?site.name:'—', firstIn, lastOut,
+        late: isLate ? 'نعم' : 'لا',
+        leave: onLeave ? 'نعم' : '—',
+        status, overtime: formatOvertime(hoursWorked, dateStr, empRecords[0].siteId)
+      });
     }else{
-      // weekly/monthly: sum overtime across days present (holiday days = full hours as OT)
+      // weekly/monthly: sum overtime + late days + leave days across the period
       const dayGroups = {};
       empRecords.forEach(r=>{
         if(!dayGroups[r.dateKey]) dayGroups[r.dateKey] = {ins:[], outs:[]};
@@ -1594,9 +1610,11 @@ function computeReportRows(){
       let totalOTHours = 0;
       let daysPresent = 0;
       let holidayDaysWorked = 0;
+      let lateDaysCount = 0;
       Object.entries(dayGroups).forEach(([dKey, day])=>{
         if(day.ins.length) daysPresent++;
         const onHoliday = isHoliday(dKey);
+        const onLeave = getApprovedLeaveForDate(emp.id, dKey);
         if(onHoliday && day.ins.length) holidayDaysWorked++;
         if(day.ins.length && day.outs.length){
           const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
@@ -1608,7 +1626,23 @@ function computeReportRows(){
             else if(hrs > stdHrs) totalOTHours += (hrs - stdHrs);
           }
         }
+        if(day.ins.length && !onHoliday && !onLeave){
+          const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
+          const site = sites.find(s=>s.id===firstIn.siteId);
+          const schedStart = (site && site.workStart) ? site.workStart : workStart;
+          const [sh, sm] = schedStart.split(':').map(Number);
+          const inDate = new Date(firstIn.timestamp);
+          const scheduledStart = new Date(inDate);
+          scheduledStart.setHours(sh, sm, 0, 0);
+          const minutesLate = (inDate - scheduledStart) / 60000;
+          if(minutesLate > LATE_GRACE_MINUTES) lateDaysCount++;
+        }
       });
+
+      // count leave days across the period for this employee
+      const allDatesInRange = enumerateDates(range.start, range.end > todayKey() ? todayKey() : range.end);
+      const leaveDaysCount = allDatesInRange.filter(dKey => getApprovedLeaveForDate(emp.id, dKey)).length;
+
       const effectiveEnd = range.end > todayKey() ? todayKey() : range.end;
       const totalDaysInRange = daysBetween(range.start, effectiveEnd);
       const site = sites.find(s=>s.id===emp.siteId);
@@ -1619,6 +1653,8 @@ function computeReportRows(){
       rows.push({
         empName: emp.name, siteName: site?site.name:'—',
         firstIn: `${daysPresent} يوم`, lastOut: `من ${totalDaysInRange} يوم`,
+        late: lateDaysCount > 0 ? `${lateDaysCount} يوم` : '0',
+        leave: leaveDaysCount > 0 ? `${leaveDaysCount} يوم` : '0',
         status: daysPresent>0 ? (daysPresent>=totalDaysInRange? 'present':'partial') : 'absent',
         overtime: overtimeDisplay
       });
@@ -1632,8 +1668,6 @@ function daysBetween(startStr, endStr){
   return Math.round((e-s)/(1000*60*60*24)) + 1;
 }
 
-const LATE_GRACE_MINUTES = 15;
-
 // builds a list of every calendar date in [start, end] (inclusive)
 function enumerateDates(startStr, endStr){
   const dates = [];
@@ -1644,71 +1678,6 @@ function enumerateDates(startStr, endStr){
     cur.setDate(cur.getDate() + 1);
   }
   return dates;
-}
-
-function computeReportSummary(){
-  const type = document.getElementById('reportType').value;
-  const dateStr = document.getElementById('reportDate').value || todayKey();
-  const siteFilter = document.getElementById('reportSite').value;
-  const range = getDateRange(type, dateStr);
-  const relevantEmployees = siteFilter==='all' ? employees : employees.filter(e=>e.siteId===siteFilter);
-  const allDates = enumerateDates(range.start, range.end);
-
-  return relevantEmployees.map(emp=>{
-    const empRecords = records.filter(r=>r.empId===emp.id && r.dateKey>=range.start && r.dateKey<=range.end && (siteFilter==='all' || r.siteId===siteFilter));
-    const dayGroups = {};
-    empRecords.forEach(r=>{
-      if(!dayGroups[r.dateKey]) dayGroups[r.dateKey] = {ins:[], outs:[]};
-      dayGroups[r.dateKey][r.type==='in'?'ins':'outs'].push(r);
-    });
-
-    let lateDays = 0;
-    let absentDays = 0;
-    let leaveDays = 0;
-    let totalOTHours = 0;
-    const todayStr = todayKey();
-
-    allDates.forEach(dKey=>{
-      if(dKey > todayStr) return; // skip future dates — they haven't happened yet
-      const onHoliday = isHoliday(dKey);
-      const onLeave = getApprovedLeaveForDate(emp.id, dKey);
-      const day = dayGroups[dKey];
-      if(!day || !day.ins.length){
-        if(onLeave) leaveDays++;
-        else if(!onHoliday) absentDays++;
-        return;
-      }
-      const firstIn = day.ins.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))[0];
-      const site = sites.find(s=>s.id===firstIn.siteId);
-      const schedStart = (site && site.workStart) ? site.workStart : workStart;
-      const [sh, sm] = schedStart.split(':').map(Number);
-      const inDate = new Date(firstIn.timestamp);
-      const scheduledStart = new Date(inDate);
-      scheduledStart.setHours(sh, sm, 0, 0);
-      const minutesLate = (inDate - scheduledStart) / 60000;
-      if(!onHoliday && !onLeave && minutesLate > LATE_GRACE_MINUTES) lateDays++;
-
-      if(day.outs.length){
-        const lastOut = day.outs.sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).slice(-1)[0];
-        const hrs = calcHoursWorked(firstIn.timestamp, lastOut.timestamp);
-        const stdHrs = getStandardHoursPerDay(firstIn.siteId);
-        if(hrs !== null){
-          if(onHoliday) totalOTHours += hrs;
-          else if(hrs > stdHrs) totalOTHours += (hrs - stdHrs);
-        }
-      }
-    });
-
-    const otH = Math.floor(totalOTHours);
-    const otM = Math.round((totalOTHours-otH)*60);
-    return {
-      empName: emp.name,
-      lateDays,
-      absentDays,
-      leaveDays,
-      overtime: `${otH}:${String(otM).padStart(2,'0')}`
-    };
-  });
 }
 
 function statusLabel(status){
@@ -1722,15 +1691,12 @@ function statusLabel(status){
 
 function renderReport(){
   const type = document.getElementById('reportType').value;
-  const titleEl = document.getElementById('detailSectionTitle');
   const colFirstIn = document.getElementById('colFirstIn');
   const colLastOut = document.getElementById('colLastOut');
   if(type === 'daily'){
-    titleEl.textContent = '📄 التفاصيل اليومية';
     colFirstIn.textContent = 'الحضور';
     colLastOut.textContent = 'الانصراف';
   }else{
-    titleEl.textContent = '📄 تفاصيل أيام الحضور بالفترة (لكل موظف)';
     colFirstIn.textContent = 'أيام حضور';
     colLastOut.textContent = 'من إجمالي أيام الفترة';
   }
@@ -1738,7 +1704,7 @@ function renderReport(){
   const {rows} = computeReportRows();
   const body = document.getElementById('reportBody');
   if(!rows.length){
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
   }else{
     body.innerHTML = rows.map(r=>`
       <tr>
@@ -1746,24 +1712,10 @@ function renderReport(){
         <td>${r.siteName}</td>
         <td>${r.firstIn}</td>
         <td>${r.lastOut}</td>
+        <td>${r.late === 'نعم' ? `<span class="badge partial">نعم</span>` : r.late}</td>
+        <td>${r.leave === 'نعم' ? `<span class="badge" style="background:rgba(95,145,214,.2); color:#8fb8f0;">نعم</span>` : r.leave}</td>
         <td>${r.overtime}</td>
         <td>${statusLabel(r.status)}</td>
-      </tr>
-    `).join('');
-  }
-
-  const summary = computeReportSummary();
-  const summaryBody = document.getElementById('summaryBody');
-  if(!summary.length){
-    summaryBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-dim); padding:24px;">لا يوجد بيانات لهذه الفترة</td></tr>';
-  }else{
-    summaryBody.innerHTML = summary.map(s=>`
-      <tr>
-        <td>${s.empName}</td>
-        <td>${s.lateDays > 0 ? `<span class="badge partial">${s.lateDays}</span>` : '0'}</td>
-        <td>${s.absentDays > 0 ? `<span class="badge absent">${s.absentDays}</span>` : '0'}</td>
-        <td>${s.leaveDays > 0 ? `<span class="badge" style="background:rgba(95,145,214,.2); color:#8fb8f0;">${s.leaveDays}</span>` : '0'}</td>
-        <td>${s.overtime}</td>
       </tr>
     `).join('');
   }
@@ -1772,23 +1724,12 @@ function renderReport(){
 // ---------- PDF export (Arabic via browser print) ----------
 function exportPDF(){
   const {rows, range} = computeReportRows();
-  const summary = computeReportSummary();
   const type = document.getElementById('reportType').value;
   const typeLabel = type==='daily'?'يومي':(type==='weekly'?'أسبوعي':'شهري');
   const siteFilter = document.getElementById('reportSite').value;
   const siteName = siteFilter==='all' ? 'كل المواقع' : (sites.find(s=>s.id===siteFilter)?.name || '—');
-  const detailTitle = type==='daily' ? '📄 التفاصيل اليومية' : '📄 تفاصيل أيام الحضور بالفترة (لكل موظف)';
   const colFirstInLabel = type==='daily' ? 'الحضور' : 'أيام حضور';
   const colLastOutLabel = type==='daily' ? 'الانصراف' : 'من إجمالي أيام الفترة';
-
-  const summaryRowsHtml = summary.map(s=>`
-    <tr>
-      <td>${s.empName}</td>
-      <td>${s.lateDays}</td>
-      <td>${s.absentDays}</td>
-      <td>${s.leaveDays}</td>
-      <td>${s.overtime}</td>
-    </tr>`).join('');
 
   const rowsHtml = rows.map(r=>`
     <tr>
@@ -1796,6 +1737,8 @@ function exportPDF(){
       <td>${r.siteName}</td>
       <td>${r.firstIn}</td>
       <td>${r.lastOut}</td>
+      <td>${r.late}</td>
+      <td>${r.leave}</td>
       <td>${r.overtime}</td>
       <td>${r.status==='present'?'حاضر':(r.status==='partial'?'جزئي':(r.status==='early'?'انصراف مبكر':(r.status==='holiday'?'عطلة':(r.status==='leave'?'إجازة':'غائب'))))}</td>
     </tr>`).join('');
@@ -1856,16 +1799,9 @@ function exportPDF(){
         <div class="sub">الموقع: ${siteName} &nbsp;|&nbsp; تاريخ الإصدار: ${new Date().toLocaleDateString('ar-IQ')}</div>
       </div>
 
-      <h2>📋 ملخص الفترة (لكل موظف)</h2>
       <table>
-        <thead><tr><th>الموظف</th><th>أيام التأخير</th><th>أيام الغياب</th><th>أيام إجازة</th><th>إجمالي وقت إضافي</th></tr></thead>
-        <tbody>${summaryRowsHtml || '<tr><td colspan="5" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
-      </table>
-
-      <h2>${detailTitle}</h2>
-      <table>
-        <thead><tr><th>الموظف</th><th>الموقع</th><th>${colFirstInLabel}</th><th>${colLastOutLabel}</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
-        <tbody>${rowsHtml || '<tr><td colspan="6" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
+        <thead><tr><th>الموظف</th><th>الموقع</th><th>${colFirstInLabel}</th><th>${colLastOutLabel}</th><th>متأخر</th><th>إجازة</th><th>وقت إضافي</th><th>الحالة</th></tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="8" style="text-align:center;">لا يوجد بيانات</td></tr>'}</tbody>
       </table>
     </body>
     </html>
