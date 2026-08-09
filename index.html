@@ -1499,7 +1499,9 @@ function getDateRange(type, dateStr){
   }
   if(type === 'weekly'){
     const day = d.getDay(); // 0 sun .. 6 sat
-    const start = new Date(d); start.setDate(d.getDate() - day);
+    // week starts on Saturday: shift so Saturday=0, Sunday=1, ... Friday=6
+    const offsetFromSaturday = (day + 1) % 7;
+    const start = new Date(d); start.setDate(d.getDate() - offsetFromSaturday);
     const end = new Date(start); end.setDate(start.getDate() + 6);
     return {start: todayKey(start), end: todayKey(end), label: `الأسبوع من ${start.toLocaleDateString('ar-IQ')} إلى ${end.toLocaleDateString('ar-IQ')}`};
   }
