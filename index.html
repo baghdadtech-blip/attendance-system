@@ -1540,6 +1540,12 @@ function getApprovedLeaveForDate(empId, dateKey){
 
 const LATE_GRACE_MINUTES = 15;
 
+// earliest dateKey across all attendance records ever recorded (system start date)
+function getSystemStartDate(){
+  if(!records.length) return todayKey();
+  return records.reduce((min, r) => r.dateKey < min ? r.dateKey : min, records[0].dateKey);
+}
+
 function computeReportRows(){
   const type = document.getElementById('reportType').value;
   const dateStr = document.getElementById('reportDate').value || todayKey();
@@ -1642,11 +1648,14 @@ function computeReportRows(){
       });
 
       // count leave days across the period for this employee
-      const allDatesInRange = enumerateDates(range.start, range.end > todayKey() ? todayKey() : range.end);
+      const todayStr = todayKey();
+      const systemStart = getSystemStartDate();
+      const effectiveStart = range.start > systemStart ? range.start : systemStart;
+      const effectiveEnd = range.end > todayStr ? todayStr : range.end;
+      const allDatesInRange = enumerateDates(effectiveStart, effectiveEnd);
       const leaveDaysCount = allDatesInRange.filter(dKey => getApprovedLeaveForDate(emp.id, dKey)).length;
 
-      const effectiveEnd = range.end > todayKey() ? todayKey() : range.end;
-      const totalDaysInRange = daysBetween(range.start, effectiveEnd);
+      const totalDaysInRange = daysBetween(effectiveStart, effectiveEnd);
       const site = sites.find(s=>s.id===emp.siteId);
       const otH = Math.floor(totalOTHours);
       const otM = Math.round((totalOTHours-otH)*60);
