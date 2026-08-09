@@ -282,6 +282,7 @@
         <div class="clock-time" id="liveClock">--:--:--</div>
         <div class="clock-date" id="liveDate">-- -- ----</div>
         <div style="margin-top:14px; color:var(--gold-400); font-weight:700; font-size:15px;" id="welcomeMsg"></div>
+        <div style="margin-top:6px; color:var(--text-dim); font-size:13px;" id="welcomeSubMsg"></div>
         <button class="btn-ghost btn-sm" style="margin-top:12px; width:auto; padding:6px 16px;" onclick="manualRefreshEmployee()">🔄 تحديث</button>
       </div>
 
@@ -420,7 +421,6 @@
           <label>نوع التقرير</label>
           <select id="reportType" onchange="renderReport()">
             <option value="daily">يومي</option>
-            <option value="weekly">أسبوعي</option>
             <option value="monthly">شهري</option>
           </select>
         </div>
@@ -754,20 +754,28 @@ function tickClock(){
 }
 setInterval(tickClock, 1000);
 
-// ---------- Device binding ----------
-function getDeviceId(){
-  let id = localStorage.getItem('attendance_device_id');
-  if(!id){
-    id = 'dev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('attendance_device_id', id);
-  }
-  return id;
-}
-
 // ---------- Employee login ----------
 function populateEmployeeSelect(){
   const sel = document.getElementById('employeeSelect');
   sel.innerHTML = employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+}
+
+const WELCOME_MESSAGES = [
+  'يومك يبدأ بخطوة صح 👏',
+  'حضورك يصنع فرق بالفريق 💪',
+  'صباح الخير والنشاط ☀️',
+  'شغلك اليوم إضافة حقيقية 🌟',
+  'كل يوم فرصة تسوي أفضل 🚀',
+  'فريقنا أقوى بوجودك 🤝',
+  'ابدأ يومك بابتسامة 😊',
+  'جهدك اليوم يستاهل التقدير 👍',
+  'خطوة جديدة نحو إنجاز أكبر 🏗️',
+  'أهلاً بيوم مليان إنجاز ✨'
+];
+
+function getWelcomeMessage(){
+  const idx = Math.floor(Math.random() * WELCOME_MESSAGES.length);
+  return WELCOME_MESSAGES[idx];
 }
 
 async function loginEmployee(){
@@ -778,9 +786,7 @@ async function loginEmployee(){
   const errBox = document.getElementById('loginError');
   if(errBox) errBox.innerHTML = '';
 
-  const myDeviceId = getDeviceId();
-
-  // re-fetch latest employees to check device binding accurately across devices
+  // re-fetch latest employees in case admin made changes
   try{
     const latest = await supabaseGet(STORAGE_KEYS.employees);
     if(latest) employees = latest;
@@ -789,24 +795,11 @@ async function loginEmployee(){
   const empLatest = employees.find(e=>e.id===id);
   if(!empLatest) return;
 
-  if(empLatest.deviceId && empLatest.deviceId !== myDeviceId){
-    // this employee is already bound to a different device — block impersonation
-    if(errBox){
-      errBox.innerHTML = `<div class="status-msg error">هذا الاسم مرتبط بموبايل آخر. لا يمكنك تسجيل الحضور باسم موظف غيرك من هذا الجهاز. إذا كان هذا خطأ (موبايل جديد)، تواصل مع الإدارة.</div>`;
-    }
-    return;
-  }
-
-  if(!empLatest.deviceId){
-    // first login on this device — bind permanently
-    empLatest.deviceId = myDeviceId;
-    await saveEmployees();
-  }
-
   currentEmployee = empLatest;
   document.getElementById('loginGate').style.display = 'none';
   document.getElementById('clockPanel').style.display = 'block';
   document.getElementById('welcomeMsg').textContent = 'مرحباً، ' + currentEmployee.name;
+  document.getElementById('welcomeSubMsg').textContent = getWelcomeMessage();
   populateSiteSelect();
   // preselect employee's home site
   const siteSel = document.getElementById('siteSelect');
@@ -1458,33 +1451,19 @@ async function renameEmployee(empId){
   populateEmployeeSelect();
 }
 
-async function unbindEmployeeDevice(empId){
-  const emp = employees.find(e=>e.id===empId);
-  if(!emp) return;
-  if(!confirm(`إلغاء ربط الموبايل الحالي لـ ${emp.name}؟ سيتمكن من تسجيل الدخول من موبايل جديد بعدها.`)) return;
-  emp.deviceId = null;
-  await saveEmployees();
-  showToast('تم إلغاء ربط الموبايل لـ ' + emp.name);
-  renderEmpList();
-}
-
 function renderEmpList(){
   const wrap = document.getElementById('empList');
   if(!employees.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد موظفين مضافين</div>'; return; }
   wrap.innerHTML = employees.map(e=>{
     const siteOptions = sites.map(s=>`<option value="${s.id}" ${s.id===e.siteId?'selected':''}>${s.name}</option>`).join('');
-    const deviceBadge = e.deviceId
-      ? `<span style="font-size:10px; color:#5fd68a; background:rgba(47,158,91,.15); padding:2px 8px; border-radius:10px;">مربوط بموبايل</span>`
-      : `<span style="font-size:10px; color:var(--text-dim); background:rgba(255,255,255,.06); padding:2px 8px; border-radius:10px;">غير مربوط</span>`;
     return `<div class="emp-list-item">
-      <div><b>${e.name}</b><span style="margin-top:4px; display:inline-block;">${deviceBadge}</span></div>
+      <div><b>${e.name}</b></div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <select style="width:auto; min-width:150px; padding:6px 10px; font-size:12px;" onchange="updateEmployeeSite('${e.id}', this.value)">
           <option value="">بدون موقع أساسي</option>
           ${siteOptions}
         </select>
         <button class="btn-ghost btn-sm" onclick="renameEmployee('${e.id}')" style="color:var(--gold-300);">✎ تعديل الاسم</button>
-        ${e.deviceId ? `<button class="btn-ghost btn-sm" onclick="unbindEmployeeDevice('${e.id}')" style="color:var(--gold-300);">إلغاء ربط الموبايل</button>` : ''}
         <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
       </div>
     </div>`;
@@ -1494,21 +1473,16 @@ function renderEmpList(){
 // ---------- Reporting ----------
 function getDateRange(type, dateStr){
   const d = new Date(dateStr + 'T00:00:00');
+  const todayStr = todayKey();
   if(type === 'daily'){
     return {start: dateStr, end: dateStr, label: d.toLocaleDateString('ar-IQ',{weekday:'long', year:'numeric', month:'long', day:'numeric'})};
-  }
-  if(type === 'weekly'){
-    const day = d.getDay(); // 0 sun .. 6 sat
-    // week starts on Saturday: shift so Saturday=0, Sunday=1, ... Friday=6
-    const offsetFromSaturday = (day + 1) % 7;
-    const start = new Date(d); start.setDate(d.getDate() - offsetFromSaturday);
-    const end = new Date(start); end.setDate(start.getDate() + 6);
-    return {start: todayKey(start), end: todayKey(end), label: `الأسبوع من ${start.toLocaleDateString('ar-IQ')} إلى ${end.toLocaleDateString('ar-IQ')}`};
   }
   // monthly
   const start = new Date(d.getFullYear(), d.getMonth(), 1);
   const end = new Date(d.getFullYear(), d.getMonth()+1, 0);
-  return {start: todayKey(start), end: todayKey(end), label: start.toLocaleDateString('ar-IQ',{year:'numeric', month:'long'})};
+  const endKey = todayKey(end);
+  const labelEnd = endKey > todayStr ? new Date(todayStr + 'T00:00:00') : end;
+  return {start: todayKey(start), end: endKey, label: `${start.toLocaleDateString('ar-IQ',{year:'numeric', month:'long'})} (لغاية ${labelEnd.toLocaleDateString('ar-IQ')})`};
 }
 
 function calcHoursWorked(firstInISO, lastOutISO){
@@ -1736,7 +1710,7 @@ function renderReport(){
 function exportPDF(){
   const {rows, range} = computeReportRows();
   const type = document.getElementById('reportType').value;
-  const typeLabel = type==='daily'?'يومي':(type==='weekly'?'أسبوعي':'شهري');
+  const typeLabel = type==='daily'?'يومي':'شهري';
   const siteFilter = document.getElementById('reportSite').value;
   const siteName = siteFilter==='all' ? 'كل المواقع' : (sites.find(s=>s.id===siteFilter)?.name || '—');
   const colFirstInLabel = type==='daily' ? 'الحضور' : 'أيام حضور';
