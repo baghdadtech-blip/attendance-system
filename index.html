@@ -757,7 +757,7 @@ setInterval(tickClock, 1000);
 // ---------- Employee login ----------
 function populateEmployeeSelect(){
   const sel = document.getElementById('employeeSelect');
-  sel.innerHTML = employees.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+  sel.innerHTML = employees.filter(e=>!e.archived).map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
 }
 
 const WELCOME_MESSAGES = [
@@ -1224,7 +1224,8 @@ function renderStatGrid(){
   const now = new Date();
   const todayRecs = records.filter(r=>r.dateKey===today);
   const presentEmpIds = new Set(todayRecs.filter(r=>r.type==='in').map(r=>r.empId));
-  const totalEmp = employees.length;
+  const activeEmployees = employees.filter(e=>!e.archived);
+  const totalEmp = activeEmployees.length;
   const todayIsHoliday = isHoliday(today);
 
   let present = 0;
@@ -1232,7 +1233,7 @@ function renderStatGrid(){
   let absent = 0;
   let awaiting = 0; // shift hasn't started yet for this employee's site
 
-  employees.forEach(emp=>{
+  activeEmployees.forEach(emp=>{
     if(presentEmpIds.has(emp.id)){ present++; return; }
     if(todayIsHoliday) return; // holidays aren't counted as absent/awaiting
     if(getApprovedLeaveForDate(emp.id, today)){ onLeave++; return; }
@@ -1421,8 +1422,12 @@ async function addEmployee(){
 }
 
 async function deleteEmployee(id){
-  if(!confirm('حذف هذا الموظف؟')) return;
-  employees = employees.filter(e=>e.id!==id);
+  if(!confirm('حذف هذا الموظف؟ (سجلات حضوره السابقة تبقى محفوظة وتظهر بالتقارير القديمة)')) return;
+  const emp = employees.find(e=>e.id===id);
+  if(emp){
+    emp.archived = true; // soft-delete: keep the record so historical reports still show the name
+    emp.siteId = ''; // no longer tied to an active site
+  }
   await saveEmployees();
   refreshAdmin();
   populateEmployeeSelect();
@@ -1451,23 +1456,52 @@ async function renameEmployee(empId){
   populateEmployeeSelect();
 }
 
+async function restoreEmployee(id){
+  const emp = employees.find(e=>e.id===id);
+  if(!emp) return;
+  emp.archived = false;
+  await saveEmployees();
+  showToast('تم استرجاع ' + emp.name);
+  refreshAdmin();
+  populateEmployeeSelect();
+}
+
 function renderEmpList(){
   const wrap = document.getElementById('empList');
+  const active = employees.filter(e=>!e.archived);
+  const archived = employees.filter(e=>e.archived);
+
   if(!employees.length){ wrap.innerHTML = '<div class="empty-state">لا يوجد موظفين مضافين</div>'; return; }
-  wrap.innerHTML = employees.map(e=>{
-    const siteOptions = sites.map(s=>`<option value="${s.id}" ${s.id===e.siteId?'selected':''}>${s.name}</option>`).join('');
-    return `<div class="emp-list-item">
+
+  let html = '';
+  if(!active.length){
+    html += '<div class="empty-state">لا يوجد موظفين نشطين</div>';
+  }else{
+    html += active.map(e=>{
+      const siteOptions = sites.map(s=>`<option value="${s.id}" ${s.id===e.siteId?'selected':''}>${s.name}</option>`).join('');
+      return `<div class="emp-list-item">
+        <div><b>${e.name}</b></div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <select style="width:auto; min-width:150px; padding:6px 10px; font-size:12px;" onchange="updateEmployeeSite('${e.id}', this.value)">
+            <option value="">بدون موقع أساسي</option>
+            ${siteOptions}
+          </select>
+          <button class="btn-ghost btn-sm" onclick="renameEmployee('${e.id}')" style="color:var(--gold-300);">✎ تعديل الاسم</button>
+          <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  if(archived.length){
+    html += `<div style="font-size:12px; color:var(--text-dim); margin:16px 0 8px; font-weight:600;">موظفون سابقون (محذوفون، سجلاتهم محفوظة بالتقارير)</div>`;
+    html += archived.map(e=>`<div class="emp-list-item" style="opacity:.6;">
       <div><b>${e.name}</b></div>
-      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <select style="width:auto; min-width:150px; padding:6px 10px; font-size:12px;" onchange="updateEmployeeSite('${e.id}', this.value)">
-          <option value="">بدون موقع أساسي</option>
-          ${siteOptions}
-        </select>
-        <button class="btn-ghost btn-sm" onclick="renameEmployee('${e.id}')" style="color:var(--gold-300);">✎ تعديل الاسم</button>
-        <button class="btn-ghost btn-sm" onclick="deleteEmployee('${e.id}')" style="color:#f18d84;">حذف</button>
-      </div>
-    </div>`;
-  }).join('');
+      <button class="btn-ghost btn-sm" onclick="restoreEmployee('${e.id}')" style="color:#5fd68a;">↺ استرجاع</button>
+    </div>`).join('');
+  }
+
+  wrap.innerHTML = html;
 }
 
 // ---------- Reporting ----------
@@ -1526,7 +1560,18 @@ function computeReportRows(){
   const siteFilter = document.getElementById('reportSite').value;
   const range = getDateRange(type, dateStr);
 
-  const relevantEmployees = siteFilter==='all' ? employees : employees.filter(e=>e.siteId===siteFilter);
+  // active employees, filtered by site as usual
+  const activeRelevant = (siteFilter==='all' ? employees : employees.filter(e=>e.siteId===siteFilter)).filter(e=>!e.archived);
+
+  // archived (deleted) employees who have records in this period — always include their historical data,
+  // filtering by whether any of their records in the period match the selected site
+  const periodRecords = records.filter(r => r.dateKey>=range.start && r.dateKey<=range.end);
+  const archivedIdsWithRecords = new Set(periodRecords.map(r=>r.empId));
+  const archivedRelevant = employees.filter(e => e.archived && archivedIdsWithRecords.has(e.id) &&
+    (siteFilter==='all' || periodRecords.some(r => r.empId===e.id && r.siteId===siteFilter))
+  );
+
+  const relevantEmployees = [...activeRelevant, ...archivedRelevant];
 
   const rows = [];
   relevantEmployees.forEach(emp=>{
