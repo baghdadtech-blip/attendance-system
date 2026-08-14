@@ -383,6 +383,22 @@
     </div>
 
     <div class="card">
+      <div class="card-title">🔒 إعدادات الأمان</div>
+      <div class="filter-row">
+        <div>
+          <label>كلمة سر admin الجديدة</label>
+          <input type="password" id="newAdminPassword" placeholder="اتركه فارغاً لعدم التغيير">
+        </div>
+        <div>
+          <label>كلمة سر manager الجديدة</label>
+          <input type="password" id="newManagerPassword" placeholder="اتركه فارغاً لعدم التغيير">
+        </div>
+      </div>
+      <button class="btn btn-gold btn-sm" onclick="updatePasswords()">حفظ كلمات السر الجديدة</button>
+      <div id="passwordUpdateMsg"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
         <span>🗓️ طلبات الإجازة الزمنية</span>
         <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="toggleLeaveArchive()" id="leaveArchiveToggleBtn">عرض الأرشيف</button>
@@ -534,7 +550,7 @@ let workEnd = '17:00';
 let fridayIsHoliday = true;
 let customHolidays = []; // array of 'YYYY-MM-DD'
 
-const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings', leaveRequests:'attendance:leaveRequests'};
+const STORAGE_KEYS = {sites:'attendance:sites', employees:'attendance:employees', records:'attendance:records', settings:'attendance:settings', leaveRequests:'attendance:leaveRequests', authCredentials:'attendance:authCredentials'};
 let leaveRequests = [];
 
 // ---------- Supabase config ----------
@@ -701,12 +717,27 @@ document.getElementById('navTabs').addEventListener('click', (e)=>{
 });
 
 // ---------- Admin authentication ----------
-const AUTH_CREDENTIALS = [
+let AUTH_CREDENTIALS = [
   { username: 'admin', password: 'Draft2020@@', role: 'admin' },
   { username: 'manager', password: 'Cool2020@@', role: 'manager' }
 ];
 const ADMIN_SESSION_KEY = 'attendance_admin_session';
 const ADMIN_ROLE_KEY = 'attendance_admin_role';
+
+async function loadAuthCredentials(){
+  try{
+    const stored = await supabaseGet(STORAGE_KEYS.authCredentials);
+    if(stored && Array.isArray(stored) && stored.length){
+      AUTH_CREDENTIALS = stored;
+    }
+  }catch(e){ /* keep defaults if fetch fails */ }
+}
+
+async function saveAuthCredentials(){
+  const ok = await supabaseSet(STORAGE_KEYS.authCredentials, AUTH_CREDENTIALS);
+  if(!ok) showToast('خطأ بحفظ بيانات الدخول');
+  return ok;
+}
 
 function isAdminAuthenticated(){
   return sessionStorage.getItem(ADMIN_SESSION_KEY) === 'true';
@@ -754,6 +785,40 @@ function adminLogout(){
   document.getElementById('adminPanel').style.display = 'none';
   document.getElementById('adminUsername').value = '';
   document.getElementById('adminPassword').value = '';
+}
+
+async function updatePasswords(){
+  const newAdminPw = document.getElementById('newAdminPassword').value.trim();
+  const newManagerPw = document.getElementById('newManagerPassword').value.trim();
+  const msgBox = document.getElementById('passwordUpdateMsg');
+
+  if(!newAdminPw && !newManagerPw){
+    msgBox.innerHTML = '<div class="status-msg error">أدخل كلمة سر جديدة واحدة على الأقل</div>';
+    return;
+  }
+  if((newAdminPw && newAdminPw.length < 6) || (newManagerPw && newManagerPw.length < 6)){
+    msgBox.innerHTML = '<div class="status-msg error">كلمة السر يجب أن تكون 6 أحرف على الأقل</div>';
+    return;
+  }
+
+  if(newAdminPw){
+    const adminCred = AUTH_CREDENTIALS.find(c => c.role === 'admin');
+    if(adminCred) adminCred.password = newAdminPw;
+  }
+  if(newManagerPw){
+    const managerCred = AUTH_CREDENTIALS.find(c => c.role === 'manager');
+    if(managerCred) managerCred.password = newManagerPw;
+  }
+
+  const ok = await saveAuthCredentials();
+  if(ok){
+    msgBox.innerHTML = '<div class="status-msg success">تم تحديث كلمات السر بنجاح</div>';
+    document.getElementById('newAdminPassword').value = '';
+    document.getElementById('newManagerPassword').value = '';
+    setTimeout(()=>msgBox.innerHTML='', 4000);
+  }else{
+    msgBox.innerHTML = '<div class="status-msg error">حدث خطأ أثناء الحفظ، حاول مرة أخرى</div>';
+  }
 }
 
 // ---------- Clock ----------
@@ -1906,6 +1971,7 @@ function exportPDF(){
 // ============================================================
 async function init(){
   await loadData();
+  await loadAuthCredentials();
   populateEmployeeSelect();
   populateSiteSelect();
   tickClock();
