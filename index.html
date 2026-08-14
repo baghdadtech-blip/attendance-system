@@ -434,6 +434,12 @@
             <option value="all">كل المواقع</option>
           </select>
         </div>
+        <div>
+          <label>الموظف</label>
+          <select id="reportEmployee" onchange="renderReport()">
+            <option value="all">كل الموظفين</option>
+          </select>
+        </div>
       </div>
       <div class="btn-row" style="margin-bottom:16px;">
         <button class="btn btn-gold btn-sm" onclick="exportPDF()">🖨️ طباعة / تصدير PDF</button>
@@ -709,12 +715,12 @@ function getCurrentRole(){
 function applyRoleVisibility(){
   const role = getCurrentRole();
   const isManager = role === 'manager';
-  // hide everything except the overview + reports cards for managers
+  // hide everything except overview + reports + leave requests cards for managers
   document.querySelectorAll('#adminPanel > .card').forEach(card=>{
     const title = card.querySelector('.card-title');
     const text = title ? title.textContent : '';
-    const isReportsOrOverview = text.includes('التقارير') || text.includes('نظرة عامة');
-    card.style.display = (isManager && !isReportsOrOverview) ? 'none' : '';
+    const isAllowedForManager = text.includes('التقارير') || text.includes('نظرة عامة') || text.includes('طلبات الإجازة');
+    card.style.display = (isManager && !isAllowedForManager) ? 'none' : '';
   });
 }
 
@@ -1150,6 +1156,7 @@ async function refreshAdmin(){
   }catch(err){ /* keep current in-memory data if fetch fails */ }
 
   populateReportSiteFilter();
+  populateReportEmployeeFilter();
   populateEmpSiteSelect();
   if(!document.getElementById('reportDate').value){
     document.getElementById('reportDate').value = todayKey();
@@ -1216,6 +1223,8 @@ async function reviewLeaveRequest(reqId, newStatus){
   req.reviewedBy = getCurrentRole();
   await saveLeaveRequests();
   renderLeaveRequestsAdmin();
+  renderReport();
+  renderStatGrid();
   showToast(newStatus === 'approved' ? '✅ تمت الموافقة على الطلب' : (newStatus === 'rejected' ? '❌ تم رفض الطلب' : 'تم إرجاع الطلب للمراجعة'));
 }
 
@@ -1281,8 +1290,21 @@ function renderStatGrid(){
 // ---------- Site management ----------
 function populateReportSiteFilter(){
   const sel = document.getElementById('reportSite');
+  const currentVal = sel.value;
   sel.innerHTML = '<option value="all">كل المواقع</option>' + sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  if([...sel.options].some(o=>o.value===currentVal)) sel.value = currentVal;
 }
+
+function populateReportEmployeeFilter(){
+  const sel = document.getElementById('reportEmployee');
+  const currentVal = sel.value;
+  // include active employees plus any archived employee who has at least one attendance record ever
+  const empIdsWithRecords = new Set(records.map(r=>r.empId));
+  const relevantEmployees = employees.filter(e => !e.archived || empIdsWithRecords.has(e.id));
+  sel.innerHTML = '<option value="all">كل الموظفين</option>' + relevantEmployees.map(e=>`<option value="${e.id}">${e.name}${e.archived ? ' (سابق)' : ''}</option>`).join('');
+  if([...sel.options].some(o=>o.value===currentVal)) sel.value = currentVal;
+}
+
 function populateEmpSiteSelect(){
   const sel = document.getElementById('newEmpSite');
   sel.innerHTML = sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
@@ -1558,6 +1580,7 @@ function computeReportRows(){
   const type = document.getElementById('reportType').value;
   const dateStr = document.getElementById('reportDate').value || todayKey();
   const siteFilter = document.getElementById('reportSite').value;
+  const empFilter = document.getElementById('reportEmployee') ? document.getElementById('reportEmployee').value : 'all';
   const range = getDateRange(type, dateStr);
 
   // active employees, filtered by site as usual
@@ -1571,7 +1594,10 @@ function computeReportRows(){
     (siteFilter==='all' || periodRecords.some(r => r.empId===e.id && r.siteId===siteFilter))
   );
 
-  const relevantEmployees = [...activeRelevant, ...archivedRelevant];
+  let relevantEmployees = [...activeRelevant, ...archivedRelevant];
+  if(empFilter !== 'all'){
+    relevantEmployees = relevantEmployees.filter(e => e.id === empFilter);
+  }
 
   const rows = [];
   relevantEmployees.forEach(emp=>{
@@ -1758,6 +1784,9 @@ function exportPDF(){
   const typeLabel = type==='daily'?'يومي':'شهري';
   const siteFilter = document.getElementById('reportSite').value;
   const siteName = siteFilter==='all' ? 'كل المواقع' : (sites.find(s=>s.id===siteFilter)?.name || '—');
+  const empFilterEl = document.getElementById('reportEmployee');
+  const empFilter = empFilterEl ? empFilterEl.value : 'all';
+  const empName = empFilter==='all' ? null : (employees.find(e=>e.id===empFilter)?.name || '—');
   const colFirstInLabel = type==='daily' ? 'الحضور' : 'أيام حضور';
   const colLastOutLabel = type==='daily' ? 'الانصراف' : 'من إجمالي أيام الفترة';
 
@@ -1826,7 +1855,7 @@ function exportPDF(){
       <div class="header-line">
         <h1>أمين بناء للمقاولات — تقرير الحضور والانصراف</h1>
         <div class="sub">نوع التقرير: ${typeLabel} &nbsp;|&nbsp; الفترة: ${range.label}</div>
-        <div class="sub">الموقع: ${siteName} &nbsp;|&nbsp; تاريخ الإصدار: ${new Date().toLocaleDateString('ar-IQ')}</div>
+        <div class="sub">الموقع: ${siteName}${empName ? ' &nbsp;|&nbsp; الموظف: ' + empName : ''} &nbsp;|&nbsp; تاريخ الإصدار: ${new Date().toLocaleDateString('ar-IQ')}</div>
       </div>
 
       <table>
