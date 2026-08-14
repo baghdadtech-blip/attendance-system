@@ -1027,11 +1027,26 @@ async function submitLeaveRequest(){
     req.endTime = endTime;
   }
 
-  // re-fetch latest requests before appending to avoid overwriting others
+  // re-fetch latest requests before checking for duplicates and appending
   try{
     const latest = await supabaseGet(STORAGE_KEYS.leaveRequests);
     if(latest) leaveRequests = latest;
   }catch(e){ /* fall back to in-memory */ }
+
+  // block a new request if the employee already has a pending or approved request
+  // that overlaps this date range (rejected requests don't block re-submission)
+  const newStart = req.startDate;
+  const newEnd = req.endDate;
+  const hasConflict = leaveRequests.some(r =>
+    r.empId === currentEmployee.id &&
+    r.status !== 'rejected' &&
+    newStart <= (r.endDate || r.startDate) &&
+    newEnd >= r.startDate
+  );
+  if(hasConflict){
+    msgBox.innerHTML = '<div class="status-msg error">لديك طلب إجازة آخر (قيد المراجعة أو موافق عليه) يغطي نفس التاريخ. لا يمكن تقديم طلب مكرر لنفس اليوم.</div>';
+    return;
+  }
 
   leaveRequests.push(req);
   await saveLeaveRequests();
