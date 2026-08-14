@@ -383,8 +383,12 @@
     </div>
 
     <div class="card">
-      <div class="card-title">🗓️ طلبات الإجازة الزمنية</div>
-      <div id="leaveRequestsList"><div class="empty-state">لا يوجد طلبات</div></div>
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>🗓️ طلبات الإجازة الزمنية</span>
+        <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="toggleLeaveArchive()" id="leaveArchiveToggleBtn">عرض الأرشيف</button>
+      </div>
+      <div id="leaveRequestsList"><div class="empty-state">لا يوجد طلبات قيد المراجعة</div></div>
+      <div id="leaveArchiveList" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--navy-600);"></div>
     </div>
 
     <div class="card">
@@ -1182,37 +1186,50 @@ async function manualRefreshAdmin(){
 // LEAVE REQUESTS (admin side)
 // ============================================================
 
+function renderLeaveRequestRow(r){
+  const dateLabel = r.type === 'full'
+    ? (r.startDate === r.endDate ? r.startDate : `${r.startDate} إلى ${r.endDate}`)
+    : `${r.startDate} (${r.startTime} - ${r.endTime})`;
+  const actions = r.status === 'pending'
+    ? `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','approved')" style="color:#5fd68a;">✓ موافقة</button>
+       <button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','rejected')" style="color:#f18d84;">✗ رفض</button>`
+    : `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','pending')" style="color:var(--text-dim);">إعادة للمراجعة</button>`;
+  return `<div class="site-list-item">
+    <div class="info">
+      <b>${r.empName}</b>
+      <span>${dateLabel}${r.reason ? ' · ' + r.reason : ''}</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      ${leaveStatusBadge(r.status)}
+      ${actions}
+    </div>
+  </div>`;
+}
+
 function renderLeaveRequestsAdmin(){
   const wrap = document.getElementById('leaveRequestsList');
-  if(!leaveRequests.length){
-    wrap.innerHTML = '<div class="empty-state">لا يوجد طلبات</div>';
-    return;
+  const archiveWrap = document.getElementById('leaveArchiveList');
+
+  const pending = leaveRequests.filter(r => r.status === 'pending').sort((a,b)=>new Date(b.createdAt) - new Date(a.createdAt));
+  const archived = leaveRequests.filter(r => r.status !== 'pending').sort((a,b)=>new Date(b.reviewedAt || b.createdAt) - new Date(a.reviewedAt || a.createdAt));
+
+  wrap.innerHTML = pending.length ? pending.map(renderLeaveRequestRow).join('') : '<div class="empty-state">لا يوجد طلبات قيد المراجعة</div>';
+
+  if(archiveWrap.style.display !== 'none'){
+    archiveWrap.innerHTML = archived.length ? archived.map(renderLeaveRequestRow).join('') : '<div class="empty-state">لا يوجد طلبات سابقة</div>';
   }
-  const sorted = [...leaveRequests].sort((a,b)=>{
-    // pending requests first, then most recent
-    if(a.status === 'pending' && b.status !== 'pending') return -1;
-    if(a.status !== 'pending' && b.status === 'pending') return 1;
-    return new Date(b.createdAt) - new Date(a.createdAt);
-  });
-  wrap.innerHTML = sorted.map(r=>{
-    const dateLabel = r.type === 'full'
-      ? (r.startDate === r.endDate ? r.startDate : `${r.startDate} إلى ${r.endDate}`)
-      : `${r.startDate} (${r.startTime} - ${r.endTime})`;
-    const actions = r.status === 'pending'
-      ? `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','approved')" style="color:#5fd68a;">✓ موافقة</button>
-         <button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','rejected')" style="color:#f18d84;">✗ رفض</button>`
-      : `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','pending')" style="color:var(--text-dim);">إعادة للمراجعة</button>`;
-    return `<div class="site-list-item">
-      <div class="info">
-        <b>${r.empName}</b>
-        <span>${dateLabel}${r.reason ? ' · ' + r.reason : ''}</span>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        ${leaveStatusBadge(r.status)}
-        ${actions}
-      </div>
-    </div>`;
-  }).join('');
+
+  const toggleBtn = document.getElementById('leaveArchiveToggleBtn');
+  if(toggleBtn && archived.length){
+    toggleBtn.textContent = archiveWrap.style.display === 'none' ? `عرض الأرشيف (${archived.length})` : 'إخفاء الأرشيف';
+  }
+}
+
+function toggleLeaveArchive(){
+  const archiveWrap = document.getElementById('leaveArchiveList');
+  const isHidden = archiveWrap.style.display === 'none';
+  archiveWrap.style.display = isHidden ? 'block' : 'none';
+  renderLeaveRequestsAdmin();
 }
 
 async function reviewLeaveRequest(reqId, newStatus){
