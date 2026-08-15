@@ -403,6 +403,31 @@
         <span>🗓️ طلبات الإجازة الزمنية</span>
         <button class="btn-ghost btn-sm" style="width:auto; padding:6px 14px; text-transform:none; letter-spacing:0;" onclick="toggleLeaveArchive()" id="leaveArchiveToggleBtn">عرض الأرشيف</button>
       </div>
+
+      <div style="background:var(--navy-900); border-radius:10px; padding:14px; margin-bottom:16px;">
+        <div style="font-size:12px; color:var(--gold-400); font-weight:700; margin-bottom:10px;">➕ إضافة إجازة مباشرة من الإدارة</div>
+        <div class="filter-row">
+          <div>
+            <label>الموظف</label>
+            <select id="adminLeaveEmployee"></select>
+          </div>
+          <div>
+            <label>من تاريخ</label>
+            <input type="date" id="adminLeaveStartDate">
+          </div>
+          <div>
+            <label>إلى تاريخ</label>
+            <input type="date" id="adminLeaveEndDate">
+          </div>
+        </div>
+        <div class="field">
+          <label>السبب (اختياري)</label>
+          <input type="text" id="adminLeaveReason" placeholder="مثال: إجازة اضطرارية بقرار الإدارة">
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="addDirectLeave()">إضافة الإجازة (موافق عليها فوراً)</button>
+        <div id="adminLeaveMsg"></div>
+      </div>
+
       <div id="leaveRequestsList"><div class="empty-state">لا يوجد طلبات قيد المراجعة</div></div>
       <div id="leaveArchiveList" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--navy-600);"></div>
     </div>
@@ -1242,6 +1267,7 @@ async function refreshAdmin(){
   populateReportSiteFilter();
   populateReportEmployeeFilter();
   populateEmpSiteSelect();
+  populateAdminLeaveEmployeeSelect();
   if(!document.getElementById('reportDate').value){
     document.getElementById('reportDate').value = todayKey();
   }
@@ -1266,6 +1292,74 @@ async function manualRefreshAdmin(){
 // LEAVE REQUESTS (admin side)
 // ============================================================
 
+function populateAdminLeaveEmployeeSelect(){
+  const sel = document.getElementById('adminLeaveEmployee');
+  if(!sel) return;
+  const active = employees.filter(e=>!e.archived);
+  sel.innerHTML = active.map(e=>`<option value="${e.id}">${e.name}</option>`).join('');
+}
+
+async function addDirectLeave(){
+  const empId = document.getElementById('adminLeaveEmployee').value;
+  const startDate = document.getElementById('adminLeaveStartDate').value;
+  const endDate = document.getElementById('adminLeaveEndDate').value || startDate;
+  const reason = document.getElementById('adminLeaveReason').value.trim();
+  const msgBox = document.getElementById('adminLeaveMsg');
+
+  const emp = employees.find(e=>e.id===empId);
+  if(!emp || !startDate){
+    msgBox.innerHTML = '<div class="status-msg error">الرجاء اختيار الموظف والتاريخ</div>';
+    return;
+  }
+  if(endDate < startDate){
+    msgBox.innerHTML = '<div class="status-msg error">تاريخ النهاية لا يمكن أن يكون قبل تاريخ البداية</div>';
+    return;
+  }
+
+  // re-fetch latest requests and check for conflicts, same rule as employee-submitted requests
+  try{
+    const latest = await supabaseGet(STORAGE_KEYS.leaveRequests);
+    if(latest) leaveRequests = latest;
+  }catch(e){ /* fall back to in-memory */ }
+
+  const hasConflict = leaveRequests.some(r =>
+    r.empId === empId &&
+    r.status !== 'rejected' &&
+    startDate <= (r.endDate || r.startDate) &&
+    endDate >= r.startDate
+  );
+  if(hasConflict){
+    msgBox.innerHTML = '<div class="status-msg error">يوجد طلب إجازة آخر (قيد المراجعة أو موافق عليه) لهذا الموظف يغطي نفس التاريخ.</div>';
+    return;
+  }
+
+  const req = {
+    id: uid('lr'),
+    empId: emp.id,
+    empName: emp.name,
+    type: 'full',
+    startDate,
+    endDate,
+    reason,
+    status: 'approved', // admin-added leave is auto-approved
+    source: 'admin',
+    createdAt: new Date().toISOString(),
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: getCurrentRole()
+  };
+
+  leaveRequests.push(req);
+  await saveLeaveRequests();
+
+  msgBox.innerHTML = '<div class="status-msg success">تمت إضافة الإجازة بنجاح</div>';
+  setTimeout(()=>msgBox.innerHTML='', 4000);
+  document.getElementById('adminLeaveReason').value = '';
+  renderLeaveRequestsAdmin();
+  renderReport();
+  renderStatGrid();
+  showToast('✅ تمت إضافة الإجازة من الإدارة');
+}
+
 function renderLeaveRequestRow(r){
   const dateLabel = r.type === 'full'
     ? (r.startDate === r.endDate ? r.startDate : `${r.startDate} إلى ${r.endDate}`)
@@ -1274,12 +1368,16 @@ function renderLeaveRequestRow(r){
     ? `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','approved')" style="color:#5fd68a;">✓ موافقة</button>
        <button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','rejected')" style="color:#f18d84;">✗ رفض</button>`
     : `<button class="btn-ghost btn-sm" onclick="reviewLeaveRequest('${r.id}','pending')" style="color:var(--text-dim);">إعادة للمراجعة</button>`;
+  const sourceBadge = r.source === 'admin'
+    ? `<span class="badge" style="background:rgba(201,162,39,.2); color:var(--gold-300); margin-inline-start:4px;">إجازة من الإدارة</span>`
+    : '';
   return `<div class="site-list-item">
     <div class="info">
       <b>${r.empName}</b>
       <span>${dateLabel}${r.reason ? ' · ' + r.reason : ''}</span>
     </div>
     <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      ${sourceBadge}
       ${leaveStatusBadge(r.status)}
       ${actions}
     </div>
