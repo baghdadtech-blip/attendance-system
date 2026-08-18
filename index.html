@@ -878,6 +878,25 @@ function getWelcomeMessage(){
   return WELCOME_MESSAGES[idx];
 }
 
+// ---------- Daily device lock (prevents impersonation: once someone logs in on this device today, only they can use it until the next day) ----------
+const DAILY_LOCK_KEY = 'attendance_daily_lock';
+
+function getDailyDeviceLock(){
+  try{
+    const raw = localStorage.getItem(DAILY_LOCK_KEY);
+    if(!raw) return null;
+    const lock = JSON.parse(raw);
+    if(lock.date !== todayKey()) return null; // lock expired, new day started
+    return lock;
+  }catch(e){ return null; }
+}
+
+function setDailyDeviceLock(empId, empName){
+  try{
+    localStorage.setItem(DAILY_LOCK_KEY, JSON.stringify({date: todayKey(), empId, empName}));
+  }catch(e){ /* if storage fails, just skip locking silently */ }
+}
+
 async function loginEmployee(){
   const id = document.getElementById('employeeSelect').value;
   const emp = employees.find(e=>e.id===id);
@@ -885,6 +904,14 @@ async function loginEmployee(){
 
   const errBox = document.getElementById('loginError');
   if(errBox) errBox.innerHTML = '';
+
+  const lock = getDailyDeviceLock();
+  if(lock && lock.empId !== id){
+    if(errBox){
+      errBox.innerHTML = `<div class="status-msg error">هذا الجهاز مستخدم اليوم من قبل ${lock.empName}. لا يمكن تسجيل الدخول باسم موظف آخر من نفس الجهاز بنفس اليوم. حاول مرة أخرى غداً.</div>`;
+    }
+    return;
+  }
 
   // re-fetch latest employees in case admin made changes
   try{
@@ -894,6 +921,8 @@ async function loginEmployee(){
 
   const empLatest = employees.find(e=>e.id===id);
   if(!empLatest) return;
+
+  setDailyDeviceLock(id, empLatest.name);
 
   currentEmployee = empLatest;
   document.getElementById('loginGate').style.display = 'none';
@@ -1755,12 +1784,17 @@ function formatOvertime(hoursWorked, dateKey, siteId){
 
 // returns the approved leave request covering this employee/date, or null
 function getApprovedLeaveForDate(empId, dateKey){
-  return leaveRequests.find(r=>
+  const matches = leaveRequests.filter(r=>
     r.empId === empId &&
     r.status === 'approved' &&
     dateKey >= r.startDate &&
     dateKey <= (r.endDate || r.startDate)
-  ) || null;
+  );
+  if(!matches.length) return null;
+  // prefer the most recently reviewed/created match, so the latest admin decision always wins
+  // if there happen to be multiple overlapping approved requests for the same date
+  matches.sort((a,b)=> new Date(b.reviewedAt || b.createdAt) - new Date(a.reviewedAt || a.createdAt));
+  return matches[0];
 }
 
 const LATE_GRACE_MINUTES = 15;
@@ -1804,7 +1838,15 @@ function computeReportRows(){
       if(type==='daily' && isHoliday(dateStr)) st = 'holiday';
       else if(approvedLeave) st = 'leave';
       else st = 'absent';
-      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn: approvedLeave ? (approvedLeave.type==='partial' ? `${approvedLeave.startTime}-${approvedLeave.endTime}` : 'إجازة') : '—', lastOut:'—', late:'—', leave: approvedLeave ? 'نعم' : '—', status:st, overtime:'—'});
+      let leaveLabel = '—';
+      if(approvedLeave){
+        if(approvedLeave.type==='partial'){
+          leaveLabel = `${approvedLeave.startTime}-${approvedLeave.endTime}`;
+        }else{
+          leaveLabel = approvedLeave.source === 'admin' ? 'إجازة (إدارة)' : 'إجازة';
+        }
+      }
+      rows.push({empName: emp.name, siteName: site?site.name:'—', firstIn: leaveLabel, lastOut:'—', late:'—', leave: approvedLeave ? 'نعم' : '—', status:st, overtime:'—'});
       return;
     }
     if(type === 'daily'){
